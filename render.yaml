@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: sproki-backend
+    runtime: docker          # <- use this instead of "env: docker"
+    plan: free               # or "starter" if you want paid
+    region: frankfurt
+    autoDeploy: true
+    disk:
+      name: dbdisk
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DATABASE_URL
+        value: sqlite:////data/sproki_reports.db   # 4 slashes after sqlite:

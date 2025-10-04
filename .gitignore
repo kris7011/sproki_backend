@@ -1,0 +1,18 @@
+# Python / venv
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# Local DB files (SQLite)
+*.db
+*.sqlite
+*.sqlite3

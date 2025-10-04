@@ -169,6 +169,9 @@ class ReportIn(BaseModel):
     class Config:
         populate_by_name = True
 
+@app.get("/")
+def root():
+    return {"message": "Sproki backend kører. Se /health og /docs"}
 
 @app.get("/health")
 def health() -> Dict[str, bool]:

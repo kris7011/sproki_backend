@@ -1,9 +1,9 @@
-# api/main.py
 from __future__ import annotations
 
 from typing import Dict, Optional
 from datetime import datetime
 from io import BytesIO
+import os
 import math
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
@@ -96,7 +96,9 @@ def analyze_single_report(age_months: int, scores: Dict[str, float]) -> Dict:
     items.sort(key=lambda x: (rank[x["zone"]], -x["distToGreen"], x["score"]))
 
     recs = [
-        {"domain": i["domain"], "tips": i["tips"]} for i in items if i["zone"] != "grøn"
+        {"domain": i["domain"], "tips": i["tips"]}
+        for i in items
+        if i["zone"] != "grøn"
     ][:3]
 
     return {
@@ -125,8 +127,11 @@ class Report(SQLModel, table=True):
     createdAt: datetime = Field(default_factory=datetime.utcnow)
 
 
-sqlite_url = "sqlite:///./sproki_reports.db"
-engine = create_engine(sqlite_url, echo=False)
+# ---------- DB engine (Render/Local) ----------
+# Brug DATABASE_URL hvis sat (Render), ellers lokal SQLite-fil
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sproki_reports.db")
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(DATABASE_URL, echo=False, connect_args=connect_args)
 
 
 def init_db() -> None:
@@ -229,7 +234,9 @@ def get_plan(child_id: str) -> Dict:
 
 
 @app.post("/children/{child_id}/analyze")
-def analyze_and_store(child_id: str, payload: ReportIn, name: Optional[str] = None) -> Dict:
+def analyze_and_store(
+    child_id: str, payload: ReportIn, name: Optional[str] = None
+) -> Dict:
     """Upsert barn, gem rapport og returnér plan i ét kald."""
     with Session(engine) as session:
         c = session.get(Child, child_id)

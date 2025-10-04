@@ -1,6 +1,4 @@
-# api/pdf_parser.py
 import re
-
 
 DOMAIN_ALIASES = {
     "sprogforståelse": [r"sprogforst[åa]else"],
@@ -24,6 +22,7 @@ def parse_scores_from_text(text: str) -> dict[str, float]:
         "rim": 0.0,
         "opmærksomhedPåSkrift": 0.0,
     }
+    # Saml linjer for mere robust regex-søgning
     t = " ".join(text.split())
 
     for dom, pats in DOMAIN_ALIASES.items():

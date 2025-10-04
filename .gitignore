@@ -1,18 +1,13 @@
-# Python / venv
+# venv & caches
 .venv/
 __pycache__/
 *.pyc
 *.pyo
-*.pyd
 
-# macOS
-.DS_Store
-
-# Editor
-.vscode/
-.idea/
-
-# Local DB files (SQLite)
+# lokale databaser og genererede filer
 *.db
 *.sqlite
-*.sqlite3
+sproki_reports.db
+
+# OS / tooling
+.DS_Store

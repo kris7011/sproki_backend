@@ -9,6 +9,9 @@ __pycache__/
 *.sqlite
 sproki_reports.db
 
+# uploads (lokalt). På Render ligger uploads på /data og bør ikke i git.
+uploads/
+
 # OS / tooling
 .DS_Store
 

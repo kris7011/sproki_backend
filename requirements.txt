@@ -9,5 +9,9 @@ pdfminer.six==20231228
 pypdfium2==4.30.0
 Pillow==11.3.0
 
+# OCR fallback
+pytesseract==0.3.13
+
 # Form uploads for FastAPI
 python-multipart==0.0.16
+aiofiles==24.1.0

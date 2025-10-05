@@ -1,14 +1,15 @@
+# api/main.py
 from __future__ import annotations
 
 from typing import Dict, Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 import os
 import math
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field as PField, ConfigDict
+from pydantic import BaseModel, Field as PField
 from sqlmodel import SQLModel, Field, Session, create_engine, select
 
 # ---------- Domæne-konstanter ----------
@@ -112,7 +113,8 @@ def analyze_single_report(age_months: int, scores: Dict[str, float]) -> Dict:
 class Child(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     name: Optional[str] = None
-    createdAt: datetime = Field(default_factory=datetime.utcnow)
+    # Brug timezone-aware UTC nu
+    createdAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class Report(SQLModel, table=True):
@@ -124,21 +126,26 @@ class Report(SQLModel, table=True):
     kommunikativeStrategier: float
     rim: float
     opmærksomhedPåSkrift: float
-    createdAt: datetime = Field(default_factory=datetime.utcnow)
+    # Brug timezone-aware UTC nu
+    createdAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # ---------- DB engine (Render/Local) ----------
-# Brug DATABASE_URL hvis sat (Render), ellers lokal SQLite-fil.
-# check_same_thread=False for SQLite i webservere med flere tråde.
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sproki_reports.db")
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, echo=False, connect_args=connect_args)
-
 
 def init_db() -> None:
     SQLModel.metadata.create_all(engine)
 
 
+# ---------- Upload-mappe ----------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_DIR = os.path.abspath(os.getenv("UPLOAD_DIR", os.path.join(BASE_DIR, "..", "uploads")))
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+# ---------- FastAPI app ----------
 app = FastAPI(title="Sproki Report Analyzer")
 app.add_middleware(
     CORSMiddleware,
@@ -146,7 +153,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 @app.on_event("startup")
 def on_startup() -> None:
@@ -163,10 +169,11 @@ class Scores(BaseModel):
 
 
 class ReportIn(BaseModel):
-    # JSON: ageMonths (alias) → Python: age_months
     age_months: int = PField(ge=0, le=120, alias="ageMonths")
     scores: Scores
-    model_config = ConfigDict(populate_by_name=True)
+
+    class Config:
+        populate_by_name = True
 
 
 class ReportOut(BaseModel):
@@ -176,18 +183,15 @@ class ReportOut(BaseModel):
     scores: Dict[str, float]
 
 
-# ---------- Basis-ruter ----------
+# ---------- Routes ----------
 @app.get("/")
 def root():
     return {"message": "Sproki backend kører. Se /health og /docs"}
-
 
 @app.get("/health")
 def health() -> Dict[str, bool]:
     return {"ok": True}
 
-
-# ---------- Child & Report CRUD ----------
 @app.post("/children/{child_id}")
 def upsert_child(child_id: str, name: Optional[str] = None) -> Dict:
     with Session(engine) as session:
@@ -200,7 +204,6 @@ def upsert_child(child_id: str, name: Optional[str] = None) -> Dict:
                 c.name = name
         session.commit()
         return {"ok": True, "childId": c.id, "name": c.name}
-
 
 @app.post("/children/{child_id}/reports")
 def add_report(child_id: str, payload: ReportIn) -> Dict:
@@ -224,7 +227,6 @@ def add_report(child_id: str, payload: ReportIn) -> Dict:
         session.refresh(r)
         return {"ok": True, "reportId": r.id, "createdAt": r.createdAt.isoformat()}
 
-
 @app.get("/children/{child_id}/plan")
 def get_plan(child_id: str) -> Dict:
     with Session(engine) as session:
@@ -244,7 +246,6 @@ def get_plan(child_id: str) -> Dict:
             D_OPM_SKRIFT: r.opmærksomhedPåSkrift,
         }
         return analyze_single_report(r.ageMonths, scores)
-
 
 @app.post("/children/{child_id}/analyze")
 def analyze_and_store(
@@ -282,56 +283,8 @@ def analyze_and_store(
         }
         return analyze_single_report(r.ageMonths, scores)
 
-
-# ---------- Historik & enkeltrapporter ----------
-@app.get("/children/{child_id}/reports", response_model=List[ReportOut])
-def list_reports(child_id: str):
-    with Session(engine) as session:
-        rows = session.exec(
-            select(Report)
-            .where(Report.childId == child_id)
-            .order_by(Report.createdAt.desc())
-        ).all()
-        return [
-            ReportOut(
-                id=r.id,
-                createdAt=r.createdAt,
-                ageMonths=r.ageMonths,
-                scores={
-                    D_SPROGFORSTAELSE: r.sprogforståelse,
-                    D_ORDFORRAD: r.ordforråd,
-                    D_KOMM_STRAT: r.kommunikativeStrategier,
-                    D_RIM: r.rim,
-                    D_OPM_SKRIFT: r.opmærksomhedPåSkrift,
-                },
-            )
-            for r in rows
-        ]
-
-
-@app.get("/children/{child_id}/reports/{report_id}", response_model=ReportOut)
-def get_report(child_id: str, report_id: int):
-    with Session(engine) as session:
-        r = session.get(Report, report_id)
-        if not r or r.childId != child_id:
-            raise HTTPException(status_code=404, detail="Report not found")
-        return ReportOut(
-            id=r.id,
-            createdAt=r.createdAt,
-            ageMonths=r.ageMonths,
-            scores={
-                D_SPROGFORSTAELSE: r.sprogforståelse,
-                D_ORDFORRAD: r.ordforråd,
-                D_KOMM_STRAT: r.kommunikativeStrategier,
-                D_RIM: r.rim,
-                D_OPM_SKRIFT: r.opmærksomhedPåSkrift,
-            },
-        )
-
-
 # ---------- PDF upload & parsing ----------
 from .pdf_parser import parse_scores_from_text
-
 
 @app.post("/children/{child_id}/reports/upload")
 async def upload_report(child_id: str, file: UploadFile = File(...)) -> Dict:
@@ -351,6 +304,19 @@ async def upload_report(child_id: str, file: UploadFile = File(...)) -> Dict:
     if not raw:
         raise HTTPException(status_code=400, detail="Tom fil")
 
+    # Gem en kopi af uploadet (ASYNKRONT) – nyttigt til fejlsøgning
+    import aiofiles  # local import for clarity
+    safe_name = file.filename.replace("/", "_").replace("\\", "_")
+    stamp = int(datetime.now(timezone.utc).timestamp())
+    dest_path = os.path.join(UPLOAD_DIR, f"{child_id}_{stamp}_{safe_name}")
+    try:
+        async with aiofiles.open(dest_path, "wb") as fh:
+            await fh.write(raw)
+    except Exception as e:
+        # Ikke fatal for analysen – vi fortsætter
+        print(f"[warn] Kunne ikke gemme upload: {e}")
+
+    # Udtræk tekst via pdfplumber
     try:
         text = ""
         with pdfplumber.open(BytesIO(raw)) as pdf:
@@ -361,7 +327,7 @@ async def upload_report(child_id: str, file: UploadFile = File(...)) -> Dict:
 
     scores = parse_scores_from_text(text)
 
-    # Float-sikker “alle ~nul”-kontrol (ingen direkte lighed med floats)
+    # Float-sikker “alle ~nul”-kontrol
     EPS = 1e-9
     if all(math.isclose(v, 0.0, abs_tol=EPS) for v in scores.values()):
         raise HTTPException(
@@ -406,4 +372,29 @@ async def upload_report(child_id: str, file: UploadFile = File(...)) -> Dict:
         "createdAt": r.createdAt.isoformat(),
         "scores": scores,
         "plan": plan,
+        "storedPdfPath": dest_path,
     }
+
+@app.get("/children/{child_id}/reports", response_model=List[ReportOut])
+def list_reports(child_id: str):
+    with Session(engine) as session:
+        rows = session.exec(
+            select(Report)
+            .where(Report.childId == child_id)
+            .order_by(Report.createdAt.desc())
+        ).all()
+        return [
+            ReportOut(
+                id=r.id,
+                createdAt=r.createdAt,
+                ageMonths=r.ageMonths,
+                scores={
+                    D_SPROGFORSTAELSE: r.sprogforståelse,
+                    D_ORDFORRAD: r.ordforråd,
+                    D_KOMM_STRAT: r.kommunikativeStrategier,
+                    D_RIM: r.rim,
+                    D_OPM_SKRIFT: r.opmærksomhedPåSkrift,
+                },
+            )
+            for r in rows
+        ]

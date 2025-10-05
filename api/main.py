@@ -1,4 +1,3 @@
-# api/main.py
 from __future__ import annotations
 
 from typing import Dict, Optional, List
@@ -113,7 +112,6 @@ def analyze_single_report(age_months: int, scores: Dict[str, float]) -> Dict:
 class Child(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     name: Optional[str] = None
-    # Brug timezone-aware UTC nu
     createdAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -126,7 +124,6 @@ class Report(SQLModel, table=True):
     kommunikativeStrategier: float
     rim: float
     opmærksomhedPåSkrift: float
-    # Brug timezone-aware UTC nu
     createdAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -140,6 +137,7 @@ def init_db() -> None:
 
 
 # ---------- Upload-mappe ----------
+# Default uploads-mappe: <repo>/uploads (kan overskrives med env UPLOAD_DIR)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.abspath(os.getenv("UPLOAD_DIR", os.path.join(BASE_DIR, "..", "uploads")))
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -285,6 +283,7 @@ def analyze_and_store(
 
 # ---------- PDF upload & parsing ----------
 from .pdf_parser import parse_scores_from_text
+import aiofiles
 
 @app.post("/children/{child_id}/reports/upload")
 async def upload_report(child_id: str, file: UploadFile = File(...)) -> Dict:
@@ -304,8 +303,7 @@ async def upload_report(child_id: str, file: UploadFile = File(...)) -> Dict:
     if not raw:
         raise HTTPException(status_code=400, detail="Tom fil")
 
-    # Gem en kopi af uploadet (ASYNKRONT) – nyttigt til fejlsøgning
-    import aiofiles  # local import for clarity
+    # Gem en kopi af uploadet (valgfrit – men nyttigt til fejlsøgning)
     safe_name = file.filename.replace("/", "_").replace("\\", "_")
     stamp = int(datetime.now(timezone.utc).timestamp())
     dest_path = os.path.join(UPLOAD_DIR, f"{child_id}_{stamp}_{safe_name}")
@@ -327,7 +325,7 @@ async def upload_report(child_id: str, file: UploadFile = File(...)) -> Dict:
 
     scores = parse_scores_from_text(text)
 
-    # Float-sikker “alle ~nul”-kontrol
+    # Float-sikker “alle ~nul”-kontrol (ingen direkte lighed med floats)
     EPS = 1e-9
     if all(math.isclose(v, 0.0, abs_tol=EPS) for v in scores.values()):
         raise HTTPException(

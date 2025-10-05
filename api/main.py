@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from datetime import datetime
 from io import BytesIO
 import os
@@ -8,9 +8,8 @@ import math
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field as PField
+from pydantic import BaseModel, Field as PField, ConfigDict
 from sqlmodel import SQLModel, Field, Session, create_engine, select
-from typing import List
 
 # ---------- Domæne-konstanter ----------
 D_SPROGFORSTAELSE = "sprogforståelse"
@@ -129,7 +128,8 @@ class Report(SQLModel, table=True):
 
 
 # ---------- DB engine (Render/Local) ----------
-# Brug DATABASE_URL hvis sat (Render), ellers lokal SQLite-fil
+# Brug DATABASE_URL hvis sat (Render), ellers lokal SQLite-fil.
+# check_same_thread=False for SQLite i webservere med flere tråde.
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sproki_reports.db")
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, echo=False, connect_args=connect_args)
@@ -166,19 +166,28 @@ class ReportIn(BaseModel):
     # JSON: ageMonths (alias) → Python: age_months
     age_months: int = PField(ge=0, le=120, alias="ageMonths")
     scores: Scores
+    model_config = ConfigDict(populate_by_name=True)
 
-    class Config:
-        populate_by_name = True
 
+class ReportOut(BaseModel):
+    id: int
+    createdAt: datetime
+    ageMonths: int
+    scores: Dict[str, float]
+
+
+# ---------- Basis-ruter ----------
 @app.get("/")
 def root():
     return {"message": "Sproki backend kører. Se /health og /docs"}
+
 
 @app.get("/health")
 def health() -> Dict[str, bool]:
     return {"ok": True}
 
 
+# ---------- Child & Report CRUD ----------
 @app.post("/children/{child_id}")
 def upsert_child(child_id: str, name: Optional[str] = None) -> Dict:
     with Session(engine) as session:
@@ -274,6 +283,52 @@ def analyze_and_store(
         return analyze_single_report(r.ageMonths, scores)
 
 
+# ---------- Historik & enkeltrapporter ----------
+@app.get("/children/{child_id}/reports", response_model=List[ReportOut])
+def list_reports(child_id: str):
+    with Session(engine) as session:
+        rows = session.exec(
+            select(Report)
+            .where(Report.childId == child_id)
+            .order_by(Report.createdAt.desc())
+        ).all()
+        return [
+            ReportOut(
+                id=r.id,
+                createdAt=r.createdAt,
+                ageMonths=r.ageMonths,
+                scores={
+                    D_SPROGFORSTAELSE: r.sprogforståelse,
+                    D_ORDFORRAD: r.ordforråd,
+                    D_KOMM_STRAT: r.kommunikativeStrategier,
+                    D_RIM: r.rim,
+                    D_OPM_SKRIFT: r.opmærksomhedPåSkrift,
+                },
+            )
+            for r in rows
+        ]
+
+
+@app.get("/children/{child_id}/reports/{report_id}", response_model=ReportOut)
+def get_report(child_id: str, report_id: int):
+    with Session(engine) as session:
+        r = session.get(Report, report_id)
+        if not r or r.childId != child_id:
+            raise HTTPException(status_code=404, detail="Report not found")
+        return ReportOut(
+            id=r.id,
+            createdAt=r.createdAt,
+            ageMonths=r.ageMonths,
+            scores={
+                D_SPROGFORSTAELSE: r.sprogforståelse,
+                D_ORDFORRAD: r.ordforråd,
+                D_KOMM_STRAT: r.kommunikativeStrategier,
+                D_RIM: r.rim,
+                D_OPM_SKRIFT: r.opmærksomhedPåSkrift,
+            },
+        )
+
+
 # ---------- PDF upload & parsing ----------
 from .pdf_parser import parse_scores_from_text
 
@@ -352,31 +407,3 @@ async def upload_report(child_id: str, file: UploadFile = File(...)) -> Dict:
         "scores": scores,
         "plan": plan,
     }
-
-class ReportOut(BaseModel):
-    id: int
-    createdAt: datetime
-    ageMonths: int
-    scores: Dict[str, float]
-
-@app.get("/children/{child_id}/reports", response_model=List[ReportOut])
-def list_reports(child_id: str):
-    with Session(engine) as session:
-        rows = session.exec(
-            select(Report).where(Report.childId == child_id).order_by(Report.createdAt.desc())
-        ).all()
-        return [
-            ReportOut(
-                id=r.id,
-                createdAt=r.createdAt,
-                ageMonths=r.ageMonths,
-                scores={
-                    D_SPROGFORSTAELSE: r.sprogforståelse,
-                    D_ORDFORRAD: r.ordforråd,
-                    D_KOMM_STRAT: r.kommunikativeStrategier,
-                    D_RIM: r.rim,
-                    D_OPM_SKRIFT: r.opmærksomhedPåSkrift,
-                },
-            )
-            for r in rows
-        ]

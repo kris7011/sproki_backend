@@ -14,5 +14,4 @@ COPY . /app
 EXPOSE 8080
 ENV PORT=8080
 
-# Lyt på Render's $PORT hvis sat, ellers 8080 lokalt
-CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8080"]

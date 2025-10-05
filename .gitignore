@@ -11,3 +11,6 @@ sproki_reports.db
 
 # OS / tooling
 .DS_Store
+
+# git selv
+.git

@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field as PField
 from sqlmodel import SQLModel, Field, Session, create_engine, select
+from typing import List
 
 # ---------- Domæne-konstanter ----------
 D_SPROGFORSTAELSE = "sprogforståelse"
@@ -351,3 +352,31 @@ async def upload_report(child_id: str, file: UploadFile = File(...)) -> Dict:
         "scores": scores,
         "plan": plan,
     }
+
+class ReportOut(BaseModel):
+    id: int
+    createdAt: datetime
+    ageMonths: int
+    scores: Dict[str, float]
+
+@app.get("/children/{child_id}/reports", response_model=List[ReportOut])
+def list_reports(child_id: str):
+    with Session(engine) as session:
+        rows = session.exec(
+            select(Report).where(Report.childId == child_id).order_by(Report.createdAt.desc())
+        ).all()
+        return [
+            ReportOut(
+                id=r.id,
+                createdAt=r.createdAt,
+                ageMonths=r.ageMonths,
+                scores={
+                    D_SPROGFORSTAELSE: r.sprogforståelse,
+                    D_ORDFORRAD: r.ordforråd,
+                    D_KOMM_STRAT: r.kommunikativeStrategier,
+                    D_RIM: r.rim,
+                    D_OPM_SKRIFT: r.opmærksomhedPåSkrift,
+                },
+            )
+            for r in rows
+        ]

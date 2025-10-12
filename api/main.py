@@ -1,15 +1,20 @@
+# api/main.py
 from __future__ import annotations
 
-from typing import Dict, Optional, List
+import json
+import math
+import os
 from datetime import datetime, timezone
 from io import BytesIO
-import os
-import math
+from typing import Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+import aiofiles
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field as PField
-from sqlmodel import SQLModel, Field, Session, create_engine, select
+from sqlmodel import Field, Session, SQLModel, create_engine, select
+
+from .pdf_parser import parse_scores_from_text
 
 # ---------- Domæne-konstanter ----------
 D_SPROGFORSTAELSE = "sprogforståelse"
@@ -53,6 +58,34 @@ RECS: Dict[str, list[str]] = {
         "Fælles problemløsning i leg.",
     ],
 }
+
+# --- Validation helpers ---
+ALLOWED_OUTCOMES = {"success", "fail"}
+
+
+def _validate_practice_event(e: "PracticeEventIn", expected_child_id: str) -> None:
+    # Guard-clauses holder kompleksiteten nede i selve endpointet
+    if e.childId != expected_child_id:
+        raise HTTPException(
+            status_code=400,
+            detail="childId in body must match path parameter",
+        )
+    if e.domain not in DOMAINS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown domain '{e.domain}'. Must be one of {DOMAINS}",
+        )
+    if e.outcome not in ALLOWED_OUTCOMES:
+        raise HTTPException(
+            status_code=400,
+            detail="outcome must be 'success' or 'fail'",
+        )
+    if e.score is not None and not (0.0 <= e.score <= 1.0):
+        raise HTTPException(
+            status_code=400,
+            detail="score must be between 0.0 and 1.0",
+        )
+
 
 # ---------- Tærskler/zoner ----------
 class Thresholds:
@@ -112,7 +145,8 @@ def analyze_single_report(age_months: int, scores: Dict[str, float]) -> Dict:
 class Child(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     name: Optional[str] = None
-    createdAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    createdAt: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc))
 
 
 class Report(SQLModel, table=True):
@@ -124,22 +158,41 @@ class Report(SQLModel, table=True):
     kommunikativeStrategier: float
     rim: float
     opmærksomhedPåSkrift: float
-    createdAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    createdAt: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc))
+
+# --- NY: PracticeEvent til logging af øvelser ---
+
+
+class PracticeEvent(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    childId: str = Field(index=True)
+    domain: str = Field(index=True)              # skal matche DOMAINS
+    exerciseId: str                              # klient-slug/id
+    outcome: str                                 # "success" | "fail"
+    score: Optional[float] = None                # 0..1
+    meta: Optional[str] = None                   # JSON-string (valgfri)
+    occurredAt: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc))
+    createdAt: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc))
 
 
 # ---------- DB engine (Render/Local) ----------
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sproki_reports.db")
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith(
+    "sqlite") else {}
 engine = create_engine(DATABASE_URL, echo=False, connect_args=connect_args)
+
 
 def init_db() -> None:
     SQLModel.metadata.create_all(engine)
 
 
 # ---------- Upload-mappe ----------
-# Default uploads-mappe: <repo>/uploads (kan overskrives med env UPLOAD_DIR)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_DIR = os.path.abspath(os.getenv("UPLOAD_DIR", os.path.join(BASE_DIR, "..", "uploads")))
+UPLOAD_DIR = os.path.abspath(
+    os.getenv("UPLOAD_DIR", os.path.join(BASE_DIR, "..", "uploads")))
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
@@ -151,6 +204,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 @app.on_event("startup")
 def on_startup() -> None:
@@ -180,15 +234,33 @@ class ReportOut(BaseModel):
     ageMonths: int
     scores: Dict[str, float]
 
+# --- NY: Pydantic schemas til practice events ---
+
+
+class PracticeEventIn(BaseModel):
+    childId: str
+    domain: str
+    exerciseId: str
+    outcome: str  # "success" | "fail"
+    score: Optional[float] = None
+    meta: Optional[Dict] = None
+    occurredAt: Optional[datetime] = None
+
+
+class PracticeEventsIn(BaseModel):
+    events: List[PracticeEventIn]
+
 
 # ---------- Routes ----------
 @app.get("/")
 def root():
     return {"message": "Sproki backend kører. Se /health og /docs"}
 
+
 @app.get("/health")
 def health() -> Dict[str, bool]:
     return {"ok": True}
+
 
 @app.post("/children/{child_id}")
 def upsert_child(child_id: str, name: Optional[str] = None) -> Dict:
@@ -202,6 +274,7 @@ def upsert_child(child_id: str, name: Optional[str] = None) -> Dict:
                 c.name = name
         session.commit()
         return {"ok": True, "childId": c.id, "name": c.name}
+
 
 @app.post("/children/{child_id}/reports")
 def add_report(child_id: str, payload: ReportIn) -> Dict:
@@ -225,6 +298,7 @@ def add_report(child_id: str, payload: ReportIn) -> Dict:
         session.refresh(r)
         return {"ok": True, "reportId": r.id, "createdAt": r.createdAt.isoformat()}
 
+
 @app.get("/children/{child_id}/plan")
 def get_plan(child_id: str) -> Dict:
     with Session(engine) as session:
@@ -244,6 +318,7 @@ def get_plan(child_id: str) -> Dict:
             D_OPM_SKRIFT: r.opmærksomhedPåSkrift,
         }
         return analyze_single_report(r.ageMonths, scores)
+
 
 @app.post("/children/{child_id}/analyze")
 def analyze_and_store(
@@ -281,13 +356,12 @@ def analyze_and_store(
         }
         return analyze_single_report(r.ageMonths, scores)
 
+
 # ---------- PDF upload & parsing ----------
-from .pdf_parser import parse_scores_from_text
-import aiofiles
+
 
 @app.post("/children/{child_id}/reports/upload")
 async def upload_report(child_id: str, file: UploadFile = File(...)) -> Dict:
-    # Lazy import, så resten af API'et virker uden pdfplumber ved normal drift
     try:
         import pdfplumber  # type: ignore
     except ImportError:
@@ -303,7 +377,6 @@ async def upload_report(child_id: str, file: UploadFile = File(...)) -> Dict:
     if not raw:
         raise HTTPException(status_code=400, detail="Tom fil")
 
-    # Gem en kopi af uploadet (valgfrit – men nyttigt til fejlsøgning)
     safe_name = file.filename.replace("/", "_").replace("\\", "_")
     stamp = int(datetime.now(timezone.utc).timestamp())
     dest_path = os.path.join(UPLOAD_DIR, f"{child_id}_{stamp}_{safe_name}")
@@ -311,21 +384,19 @@ async def upload_report(child_id: str, file: UploadFile = File(...)) -> Dict:
         async with aiofiles.open(dest_path, "wb") as fh:
             await fh.write(raw)
     except Exception as e:
-        # Ikke fatal for analysen – vi fortsætter
         print(f"[warn] Kunne ikke gemme upload: {e}")
 
-    # Udtræk tekst via pdfplumber
     try:
         text = ""
         with pdfplumber.open(BytesIO(raw)) as pdf:
             for page in pdf.pages:
                 text += (page.extract_text() or "") + "\n"
     except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Kunne ikke læse PDF: {e}")
+        raise HTTPException(
+            status_code=422, detail=f"Kunne ikke læse PDF: {e}")
 
     scores = parse_scores_from_text(text)
 
-    # Float-sikker “alle ~nul”-kontrol (ingen direkte lighed med floats)
     EPS = 1e-9
     if all(math.isclose(v, 0.0, abs_tol=EPS) for v in scores.values()):
         raise HTTPException(
@@ -373,6 +444,7 @@ async def upload_report(child_id: str, file: UploadFile = File(...)) -> Dict:
         "storedPdfPath": dest_path,
     }
 
+
 @app.get("/children/{child_id}/reports", response_model=List[ReportOut])
 def list_reports(child_id: str):
     with Session(engine) as session:
@@ -396,3 +468,44 @@ def list_reports(child_id: str):
             )
             for r in rows
         ]
+
+
+# ---------- NY: Practice events endpoint ----------
+
+
+@app.post("/children/{child_id}/practice-events")
+def add_practice_events(child_id: str, payload: PracticeEventsIn) -> Dict:
+    """
+    Modtag batch af øvelseshændelser fra appen.
+    Validerer domæner og at childId i body matcher path.
+    """
+    if not payload.events:
+        raise HTTPException(status_code=400, detail="No events provided")
+
+    # Valider alle events (branching flyttes ud i helper -> lavere kompleksitet)
+    for e in payload.events:
+        _validate_practice_event(e, child_id)
+
+    with Session(engine) as session:
+        # Sikre barn findes
+        c = session.get(Child, child_id)
+        if not c:
+            c = Child(id=child_id)
+            session.add(c)
+            session.commit()
+
+        # Indsæt rækker
+        now_utc = datetime.now(timezone.utc)
+        for e in payload.events:
+            session.add(PracticeEvent(
+                childId=child_id,
+                domain=e.domain,
+                exerciseId=e.exerciseId,
+                outcome=e.outcome,
+                score=e.score,
+                meta=json.dumps(e.meta) if e.meta else None,
+                occurredAt=e.occurredAt or now_utc,  # genbrug timestamp når felt mangler
+            ))
+        session.commit()
+
+    return {"ok": True, "accepted": len(payload.events)}

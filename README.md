@@ -13,6 +13,7 @@ En lille FastAPI-backend til at gemme rapporter og generere træningsplaner – 
 - `GET /children/{child_id}/reports` → historik
 - `GET /children/{child_id}/reports/{report_id}` → enkelt rapport
 - `POST /children/{child_id}/reports/upload` → **multipart** upload: `file=<pdf>`, valgfrit `ageMonths`, `name`
+- `POST /children/{child_id}/practice-events`  →  { events: [...] } (logger øvelser)
 
 ## Kør lokalt
 

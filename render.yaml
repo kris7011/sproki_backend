@@ -2,7 +2,7 @@ services:
   - type: web
     name: sproki-backend
     runtime: docker
-    plan: free            # brug "starter" hvis du vil undgå cold starts
+    plan: free            # skift til "starter" for at undgå cold starts
     region: frankfurt
     autoDeploy: true
     disk:
@@ -11,6 +11,6 @@ services:
       sizeGB: 1
     envVars:
       - key: DATABASE_URL
-        value: sqlite:////data/sproki_reports.db   # 4 skråstreger
+        value: sqlite:////data/sproki_reports.db   # 4 skråstreger (SQLite absolut sti)
       - key: UPLOAD_DIR
         value: /data/uploads

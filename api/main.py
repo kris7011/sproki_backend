@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import os
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
 from typing import Dict, List, Optional
@@ -108,24 +109,31 @@ class Thresholds:
 
 def analyze_single_report(age_months: int, scores: Dict[str, float]) -> Dict:
     items = []
-    for d in DOMAINS:
-        s = float(scores.get(d, 0.0))
-        z = Thresholds.zone(s)
-        dist = Thresholds.dist_to_green(s)
-        delta = min(10.0, max(4.0, dist / 2))  # 4..10 point
-        goal = min(Thresholds.green_lower, s + delta)
-        items.append(
-            {
-                "domain": d,
-                "score": round(s, 1),
-                "zone": z,
-                "distToGreen": round(dist, 1),
-                "shortTermGoal": round(goal, 1),
-                "tips": RECS.get(d, []),
-            }
-        )
-
     rank = {"rød": 0, "gul": 1, "grøn": 2}
+
+    with Session(engine) as session:
+        for d in DOMAINS:
+            s = float(scores.get(d, 0.0))
+
+            th = _lookup_threshold(session, d, age_months)
+            z = _zone_for(s, th)
+            dist = _dist_to_green(s, th)
+
+            # kortsigtet mål: gå et stykke mod grøn (4..10 points, men aldrig over grøn-min)
+            delta = min(10.0, max(4.0, dist / 2))  # 4..10 point
+            goal = min(th.green_min, s + delta)
+
+            items.append(
+                {
+                    "domain": d,
+                    "score": round(s, 1),
+                    "zone": z,
+                    "distToGreen": round(dist, 1),
+                    "shortTermGoal": round(goal, 1),
+                    "tips": RECS.get(d, []),
+                }
+            )
+
     items.sort(key=lambda x: (rank[x["zone"]], -x["distToGreen"], x["score"]))
 
     recs = [
@@ -137,7 +145,7 @@ def analyze_single_report(age_months: int, scores: Dict[str, float]) -> Dict:
     return {
         "priorityAreas": items,
         "recommendations": recs,
-        "meta": {"ageMonths": age_months, "mode": "deterministic"},
+        "meta": {"ageMonths": age_months, "mode": "age_cutoffs"},
     }
 
 
@@ -187,6 +195,8 @@ engine = create_engine(DATABASE_URL, echo=False, connect_args=connect_args)
 
 def init_db() -> None:
     SQLModel.metadata.create_all(engine)
+    with Session(engine) as s:
+        _seed_default_cutoffs(s)
 
 
 # ---------- Upload-mappe ----------
@@ -509,3 +519,77 @@ def add_practice_events(child_id: str, payload: PracticeEventsIn) -> Dict:
         session.commit()
 
     return {"ok": True, "accepted": len(payload.events)}
+
+# ---------- Tærskler/zoner (aldersafhængige) ----------
+
+
+class Cutoff(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    domain: str = Field(index=True)             # fx "rim"
+    ageMinMonths: int = Field(index=True)       # inklusiv
+    ageMaxMonths: int = Field(index=True)       # inklusiv
+    greenMin: float                              # mindstescore for grøn
+    # mindstescore for gul (under -> rød)
+    yellowMin: float
+    createdAt: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc))
+
+
+def _seed_default_cutoffs(session: Session) -> None:
+    """Seeder kun hvis tabellen er tom – simple defaults der virker nu.
+    Justér tallene efter jeres faktiske skema, når I har dem."""
+    has_any = session.exec(select(Cutoff).limit(1)).first()
+    if has_any:
+        return
+
+    defaults: list[Cutoff] = []
+    # Eksempel: 4–5 år (48–59 mdr) og 5–6 år (60–71 mdr)
+    for dom in DOMAINS:
+        defaults += [
+            Cutoff(domain=dom, ageMinMonths=48, ageMaxMonths=59,
+                   greenMin=40.0, yellowMin=20.0),
+            Cutoff(domain=dom, ageMinMonths=60, ageMaxMonths=71,
+                   greenMin=45.0, yellowMin=25.0),
+        ]
+    for row in defaults:
+        session.add(row)
+    session.commit()
+
+
+@dataclass
+class _Threshold:
+    yellow_min: float
+    green_min: float
+
+
+def _lookup_threshold(session: Session, domain: str, age_months: int) -> _Threshold:
+    """Finder aldersmatch; fallback til 'seneste' række hvis ingen eksakt matcher."""
+    stmt = (
+        select(Cutoff)
+        .where(Cutoff.domain == domain)
+        .order_by(Cutoff.ageMinMonths.asc(), Cutoff.ageMaxMonths.asc())
+    )
+    rows = session.exec(stmt).all()
+    if not rows:
+        # Hårdt fallback hvis intet i DB
+        return _Threshold(yellow_min=20.0, green_min=40.0)
+
+    for r in rows:
+        if r.ageMinMonths <= age_months <= r.ageMaxMonths:
+            return _Threshold(yellow_min=r.yellowMin, green_min=r.greenMin)
+
+    # Hvis ingen rammer: brug række med nærmeste alder (sidste)
+    last = rows[-1]
+    return _Threshold(yellow_min=last.yellowMin, green_min=last.greenMin)
+
+
+def _zone_for(score: float, th: _Threshold) -> str:
+    if score < th.yellow_min:
+        return "rød"
+    if score < th.green_min:
+        return "gul"
+    return "grøn"
+
+
+def _dist_to_green(score: float, th: _Threshold) -> float:
+    return max(0.0, th.green_min - score)

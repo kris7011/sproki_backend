@@ -1,14 +1,17 @@
 fastapi~=0.115
 uvicorn[standard]~=0.30
 
-# Datamodel/DB
+# DB / models
 sqlmodel~=0.0.22
 pydantic~=2.8
 aiofiles~=23.2
 
-# PDF-udtræk (tekstbaseret)
+# Form-data (required for UploadFile = File(...))
+python-multipart~=0.0.9
+
+# PDF text extraction
 pdfplumber~=0.11
 
-# OCR fallback (hvis PDF er scannet)
+# OCR fallback (for scanned PDFs)
 pypdfium2~=4.30
 pytesseract~=0.3.10

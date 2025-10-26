@@ -1,6 +1,9 @@
 # venv & caches
 .venv/
 __pycache__/
+.mypy_cache/
+.ruff_cache/
+.pytype/
 *.pyc
 *.pyo
 

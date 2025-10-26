@@ -35,13 +35,17 @@ def _norm_num(s: str) -> float:
 
 def _extract_text_pdfplumber(pdf_bytes: bytes) -> str:
     if not pdfplumber:
-        return ""
+        empty: str = ""
+        return empty
+
     from io import BytesIO
 
-    text = ""
+    text: str = ""
+    newline: str = "\n"
     with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
         for page in pdf.pages:
-            text += (page.extract_text() or "") + "\n"
+            page_text = page.extract_text() or ""
+            text += page_text + newline
     return text
 
 
@@ -51,22 +55,28 @@ def _extract_text_ocr(pdf_bytes: bytes, languages: Optional[Iterable[str]] = Non
     languages: fx ["dan","eng"] hvis dansk sprogdata er installeret.
     """
     if not (pdfium and pytesseract):
-        return ""
+        empty: str = ""
+        return empty
 
-    langs = "+".join(languages) if languages else None
+    plus_sep: str = "+"
+    langs: Optional[str] = plus_sep.join(languages) if languages else None
     doc = pdfium.PdfDocument(pdf_bytes)
-    text_parts = []
-    # 150 DPI er ofte nok; bump evt. til 200 hvis dine scans er små.
+    text_parts: list[str] = []
+
+    # Brug dpi-argumentet (int) for at undgå type-fejl i Pyright
     for i in range(len(doc)):
         page = doc.get_page(i)
-        bitmap = page.render(scale=150 / 72).to_pil()  # 72 DPI → 150 DPI
+        bitmap = page.render(dpi=150).to_pil()  # 150 DPI render
         try:
-            txt = pytesseract.image_to_string(bitmap, lang=langs) if langs else pytesseract.image_to_string(bitmap)
+            txt = pytesseract.image_to_string(
+                bitmap, lang=langs) if langs else pytesseract.image_to_string(bitmap)
         except Exception:
             txt = pytesseract.image_to_string(bitmap)
         text_parts.append(txt or "")
         page.close()
-    return "\n".join(text_parts)
+
+    newline: str = "\n"
+    return newline.join(text_parts)
 
 
 def parse_scores_from_text(text: str) -> Dict[str, float]:
@@ -77,12 +87,16 @@ def parse_scores_from_text(text: str) -> Dict[str, float]:
         "rim": 0.0,
         "opmærksomhedPåSkrift": 0.0,
     }
-    t = " ".join(text.split())
+
+    space_sep: str = " "
+    t: str = space_sep.join(text.split())
 
     for dom, pats in DOMAIN_ALIASES.items():
         found = False
         for p in pats:
-            regex = re.compile(rf"{p}[^0-9]{{0,40}}{NUM}", re.IGNORECASE)
+            # Match "domænenavn ... tal"
+            pattern: str = rf"{p}[^0-9]{{0,40}}{NUM}"
+            regex = re.compile(pattern, re.IGNORECASE)
             m = regex.search(t)
             if m:
                 out[dom] = _norm_num(m.group("num"))
@@ -90,10 +104,12 @@ def parse_scores_from_text(text: str) -> Dict[str, float]:
                 break
         if not found:
             for p in pats:
-                regex = re.compile(rf"{p}\s*{NUM}\s*(?:point|pts?)?", re.IGNORECASE)
-                m = regex.search(t)
-                if m:
-                    out[dom] = _norm_num(m.group("num"))
+                # Match "domænenavn tal (point/pts)"
+                pattern2: str = rf"{p}\s*{NUM}\s*(?:point|pts?)?"
+                regex2 = re.compile(pattern2, re.IGNORECASE)
+                m2 = regex2.search(t)
+                if m2:
+                    out[dom] = _norm_num(m2.group("num"))
                     break
 
     return out
@@ -105,7 +121,7 @@ def parse_scores_from_pdf_bytes(pdf_bytes: bytes) -> Dict[str, float]:
     Forsøger dansk+engelsk OCR, men fortsætter hvis sprogdata mangler.
     """
     # 1) Direkte tekst
-    text = _extract_text_pdfplumber(pdf_bytes) or ""
+    text: str = _extract_text_pdfplumber(pdf_bytes) or ""
     # 2) OCR fallback, hvis ikke noget tekst
     if not text.strip():
         # prøv dansk+engelsk, men hvis sprogdata ikke findes fortsætter pytesseract alligevel

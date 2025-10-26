@@ -1,0 +1,18 @@
+{
+    "typeCheckingMode": "basic",
+    "useLibraryCodeForTypes": true,
+    "reportMissingTypeStubs": false,
+    "reportUnknownMemberType": false,
+    "reportUnknownArgumentType": false,
+    "reportUnknownVariableType": false,
+    "reportPrivateUsage": false,
+    "exclude": [
+        "**/.venv",
+        "**/venv",
+        "**/__pycache__",
+        ".ruff_cache",
+        ".mypy_cache"
+    ],
+    "venvPath": ".",
+    "venv": ".venv"
+}

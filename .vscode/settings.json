@@ -1,0 +1,6 @@
+// .vscode/settings.json
+{
+    "python.defaultInterpreterPath": ".venv/bin/python",
+    "python.languageServer": "Pylance",
+    "python.analysis.autoImportCompletions": true
+}

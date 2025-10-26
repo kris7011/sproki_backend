@@ -1,17 +1,31 @@
+# --- Core API ---
 fastapi~=0.115
 uvicorn[standard]~=0.30
 
-# DB / models
-sqlmodel~=0.0.22
-pydantic~=2.8
+# --- DB / models ---
+sqlmodel~=0.0.27
+SQLAlchemy>=2.0.14,<2.1.0
+pydantic~=2.12
+python-multipart~=0.0.20
+
+# --- Async IO / files / HTTP ---
 aiofiles~=23.2
+aiohttp>=3.9
 
-# Form-data (required for UploadFile = File(...))
-python-multipart~=0.0.9
+# --- OIDC / JWT ---
+python-jose[cryptography]>=3.3.0
+cryptography>=36.0.0
 
-# PDF text extraction
+# --- PDF parsing / OCR ---
 pdfplumber~=0.11
-
-# OCR fallback (for scanned PDFs)
+pdfminer.six==20250506
 pypdfium2~=4.30
-pytesseract~=0.3.10
+pytesseract~=0.3.13
+
+# --- Authentication / Security (new) ---
+argon2-cffi>=23.1.0        # Secure password hashing (Argon2id)
+pyotp>=2.9.0               # TOTP 2FA (Google Authenticator compatible)
+fido2>=1.1.1               # WebAuthn / Passkey server support
+
+# --- Dev / Misc ---
+python-dotenv>=1.0

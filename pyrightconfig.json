@@ -1,18 +1,31 @@
 {
-    "typeCheckingMode": "basic",
-    "useLibraryCodeForTypes": true,
-    "reportMissingTypeStubs": false,
-    "reportUnknownMemberType": false,
-    "reportUnknownArgumentType": false,
-    "reportUnknownVariableType": false,
-    "reportPrivateUsage": false,
+    "include": [
+        "api"
+    ],
     "exclude": [
         "**/.venv",
         "**/venv",
         "**/__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
         ".ruff_cache",
-        ".mypy_cache"
+        ".pyrightcache"
     ],
+    "pythonVersion": "3.12",
+    "typeCheckingMode": "basic",
     "venvPath": ".",
-    "venv": ".venv"
+    "venv": ".venv",
+    "reportMissingTypeStubs": "none",
+    "reportUnknownMemberType": "none",
+    "reportUnknownArgumentType": "none",
+    "reportUnknownVariableType": "none",
+    "reportPrivateUsage": "none",
+    "executionEnvironments": [
+        {
+            "root": "./api",
+            "extraPaths": [
+                "./api"
+            ]
+        }
+    ]
 }

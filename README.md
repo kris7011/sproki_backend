@@ -1,25 +1,51 @@
 # Sproki Backend
 
-En lille FastAPI-backend til at gemme rapporter og generere træningsplaner – inkl. PDF-upload, **OCR fallback** for scannede PDF’er og fil-lagring på disk.
+FastAPI-backend til Sproki: rapporter, øvelser, forældre-overblik, m.m.
 
 ## Endpoints (kort)
 
-- `GET /` → ping
-- `GET /health` → `{ "ok": true }`
-- `POST /children/{child_id}` → opret/opdatér barn
-- `POST /children/{child_id}/reports` → gem rapport (JSON: scores + ageMonths)
-- `POST /children/{child_id}/analyze` → opret + analyzér i ét kald
-- `GET /children/{child_id}/plan` → seneste plan
-- `GET /children/{child_id}/reports` → historik
-- `GET /children/{child_id}/reports/{report_id}` → enkelt rapport
-- `POST /children/{child_id}/reports/upload` → **multipart** upload: `file=<pdf>`, valgfrit `ageMonths`, `name`
-- `POST /children/{child_id}/practice-events`  →  { events: [...] } (logger øvelser)
+- `GET /docs` – Swagger UI
+- `GET /health` – `{ "ok": true }`
 
-## Kør lokalt
+### Reports
+
+- `POST /reports/{child_id}` – upload rapport (body: `{ age_years, age_months, items: [{category, score}] }`)
+- `GET  /reports/{child_id}/latest` – seneste pr. kategori (zone, points_to_green, mm.)
+
+### Exercises
+
+- `GET  /exercises` – liste aktive øvelser (valgfri `?category=...`)
+- `GET  /exercises/for-child/{child_id}` – anbefalede øvelser baseret på seneste rapport/zone
+- `POST /exercises/{exercise_id}/attempts` – log ét forsøg `{ child_id, correct }`
+- `GET  /exercises/progression/{child_id}` – overblik (zone, points_to_green, accuracy)
+
+### Parents
+
+- `GET  /parents/{child_id}/overview` – “kort” pr. kategori (score/zone)
+
+> Hvis du også bruger `ppr`/`institutions`, læg dem i en separat sektion.
+
+## Første-gangs setup
 
 ```bash
+pyenv local 3.10.13
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-export DATABASE_URL="sqlite:///./sproki_reports.db"
-export UPLOAD_DIR="./uploads"
-uvicorn api.main:app --host 0.0.0.0 --port 8080 --reload
+
+# Flyt DB-modulet til api-pakken (engangskørsel)
+mkdir -p api
+# kun hvis filen findes i app/: mv app/db.py api/db.py
+touch api/__init__.py
+
+# .env (opret i projektroden)
+cat > .env << 'ENV'
+DATABASE_URL=sqlite:///./sproki_reports.db
+CORS_ORIGINS=http://localhost:3000,http://localhost:5173
+EMAIL_FROM=noreply@sproki.app
+SUPABASE_PROJECT_URL=https://icenwsoauzymexujrqoo.supabase.co
+SUPABASE_JWKS_URL=https://icenwsoauzymexujrqoo.supabase.co/auth/v1/keys
+SUPABASE_JWT_ISSUER=https://icenwsoauzymexujrqoo.supabase.co/auth/v1
+SUPABASE_JWT_AUDIENCE=authenticated
+SUPABASE_ANON_KEY=sb_publishable_1NbDihrYplvqLX-MOrLiZA_4R6d55X9
+REQUIRE_SUPABASE=0
+ENV

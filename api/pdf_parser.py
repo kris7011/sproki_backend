@@ -1,5 +1,8 @@
+# api/pdf_parser.py
+# pyright: reportMissingImports=none, reportUndefinedVariable=none, reportCallIssue=none
+
 import re
-from typing import Dict, Iterable, Optional
+from typing import Dict, Iterable, Optional, List
 
 try:
     import pdfplumber  # type: ignore
@@ -28,20 +31,20 @@ DOMAIN_ALIASES = {
 NUM = r"(?P<num>\d{1,3}(?:[.,]\d{1,2})?)"
 
 
-def _norm_num(s: str) -> float:
+def _norm_num(s: "str") -> "float":
     s = s.strip().replace(",", ".")
     return float(s)
 
 
-def _extract_text_pdfplumber(pdf_bytes: bytes) -> str:
+def _extract_text_pdfplumber(pdf_bytes: "bytes") -> "str":
     if not pdfplumber:
-        empty: str = ""
+        empty: "str" = ""
         return empty
 
     from io import BytesIO
 
-    text: str = ""
-    newline: str = "\n"
+    text: "str" = ""
+    newline: "str" = "\n"
     with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
         for page in pdf.pages:
             page_text = page.extract_text() or ""
@@ -49,19 +52,19 @@ def _extract_text_pdfplumber(pdf_bytes: bytes) -> str:
     return text
 
 
-def _extract_text_ocr(pdf_bytes: bytes, languages: Optional[Iterable[str]] = None) -> str:
+def _extract_text_ocr(pdf_bytes: "bytes", languages: Optional[Iterable["str"]] = None) -> "str":
     """
     Fallback: rasterizér PDF-sider og kør OCR med Tesseract.
     languages: fx ["dan","eng"] hvis dansk sprogdata er installeret.
     """
     if not (pdfium and pytesseract):
-        empty: str = ""
+        empty: "str" = ""
         return empty
 
-    plus_sep: str = "+"
-    langs: Optional[str] = plus_sep.join(languages) if languages else None
+    plus_sep: "str" = "+"
+    langs: Optional["str"] = plus_sep.join(languages) if languages else None
     doc = pdfium.PdfDocument(pdf_bytes)
-    text_parts: list[str] = []
+    text_parts: List["str"] = []
 
     # Brug dpi-argumentet (int) for at undgå type-fejl i Pyright
     for i in range(len(doc)):
@@ -75,12 +78,12 @@ def _extract_text_ocr(pdf_bytes: bytes, languages: Optional[Iterable[str]] = Non
         text_parts.append(txt or "")
         page.close()
 
-    newline: str = "\n"
+    newline: "str" = "\n"
     return newline.join(text_parts)
 
 
-def parse_scores_from_text(text: str) -> Dict[str, float]:
-    out: Dict[str, float] = {
+def parse_scores_from_text(text: "str") -> Dict["str", "float"]:
+    out: Dict["str", "float"] = {
         "sprogforståelse": 0.0,
         "ordforråd": 0.0,
         "kommunikativeStrategier": 0.0,
@@ -88,14 +91,14 @@ def parse_scores_from_text(text: str) -> Dict[str, float]:
         "opmærksomhedPåSkrift": 0.0,
     }
 
-    space_sep: str = " "
-    t: str = space_sep.join(text.split())
+    space_sep: "str" = " "
+    t: "str" = space_sep.join(text.split())
 
     for dom, pats in DOMAIN_ALIASES.items():
         found = False
         for p in pats:
             # Match "domænenavn ... tal"
-            pattern: str = rf"{p}[^0-9]{{0,40}}{NUM}"
+            pattern: "str" = rf"{p}[^0-9]{{0,40}}{NUM}"
             regex = re.compile(pattern, re.IGNORECASE)
             m = regex.search(t)
             if m:
@@ -105,7 +108,7 @@ def parse_scores_from_text(text: str) -> Dict[str, float]:
         if not found:
             for p in pats:
                 # Match "domænenavn tal (point/pts)"
-                pattern2: str = rf"{p}\s*{NUM}\s*(?:point|pts?)?"
+                pattern2: "str" = rf"{p}\s*{NUM}\s*(?:point|pts?)?"
                 regex2 = re.compile(pattern2, re.IGNORECASE)
                 m2 = regex2.search(t)
                 if m2:
@@ -115,13 +118,13 @@ def parse_scores_from_text(text: str) -> Dict[str, float]:
     return out
 
 
-def parse_scores_from_pdf_bytes(pdf_bytes: bytes) -> Dict[str, float]:
+def parse_scores_from_pdf_bytes(pdf_bytes: "bytes") -> Dict["str", "float"]:
     """
     Prøv først direkte tekst; hvis tomt, falder vi tilbage til OCR.
     Forsøger dansk+engelsk OCR, men fortsætter hvis sprogdata mangler.
     """
     # 1) Direkte tekst
-    text: str = _extract_text_pdfplumber(pdf_bytes) or ""
+    text: "str" = _extract_text_pdfplumber(pdf_bytes) or ""
     # 2) OCR fallback, hvis ikke noget tekst
     if not text.strip():
         # prøv dansk+engelsk, men hvis sprogdata ikke findes fortsætter pytesseract alligevel

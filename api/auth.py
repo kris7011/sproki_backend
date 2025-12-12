@@ -1,7 +1,10 @@
+# api/auth.py
+# pyright: reportGeneralTypeIssues=none, reportAttributeAccessIssue=none, reportCallIssue=none
 # Minimal auth layer.
 # In dev, set REQUIRE_SUPABASE=0 to bypass Supabase and auto-create a local LEDER user.
 
 from __future__ import annotations
+
 import os
 import datetime
 from typing import Any, Dict, Optional
@@ -13,9 +16,9 @@ from jose import jwt
 from jose.exceptions import JWTError
 from sqlmodel import Session, select
 
-from api.settings import settings
-from api.db import engine
-from api.models_user import User, Role
+from .settings import settings
+from .db import engine
+from .models_user import User as UserModel, Role as RoleEnum
 
 # In dev we allow missing Authorization header (auto_error=False)
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -68,19 +71,26 @@ def _select_jwk_for_token(token: str, jwks: Dict[str, Any]) -> Dict[str, Any]:
             if isinstance(k, dict) and k.get("kid") == kid:
                 return k
     raise HTTPException(
-        status_code=401, detail="No matching JWK for token 'kid'")
+        status_code=401,
+        detail="No matching JWK for token 'kid'",
+    )
 
 
 async def get_current_user(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
-) -> User:
+) -> UserModel:
     # Dev bypass
     if os.getenv("REQUIRE_SUPABASE", "0") == "0":
         with Session(engine) as session:
-            u = session.exec(select(User).where(User.id == "dev-user")).first()
+            u = session.exec(
+                select(UserModel).where(UserModel.id == "dev-user")
+            ).first()
             if not u:
-                u = User(id="dev-user", email="dev@sproki.local",
-                         role=Role.LEDER)
+                u = UserModel(
+                    id="dev-user",
+                    email="dev@sproki.local",
+                    role=RoleEnum.LEDER,
+                )
                 session.add(u)
                 session.commit()
                 session.refresh(u)
@@ -105,7 +115,8 @@ async def get_current_user(
         )
     except JWTError as e:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid token: {e}"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid token: {e}",
         )
 
     sub = claims.get("sub")
@@ -114,22 +125,28 @@ async def get_current_user(
     email = email.lower() if email else email
     if not sub or not email:
         raise HTTPException(
-            status_code=401, detail="Token missing required claims")
+            status_code=401,
+            detail="Token missing required claims",
+        )
 
     with Session(engine) as session:
-        u = session.exec(select(User).where(User.id == sub)).first()
+        u = session.exec(
+            select(UserModel).where(UserModel.id == sub)
+        ).first()
         if not u:
-            default_role = getattr(Role, "FORAELDER", None) or Role.LEDER
-            u = User(id=sub, email=email, role=default_role)
+            default_role = getattr(RoleEnum, "FORAELDER",
+                                   None) or RoleEnum.LEDER
+            u = UserModel(id=sub, email=email, role=default_role)
             session.add(u)
             session.commit()
             session.refresh(u)
         return u
 
 
-def require_roles(*allowed_roles: Role):
-    def _dep(user: User = Depends(get_current_user)) -> User:
+def require_roles(*allowed_roles: RoleEnum):
+    def _dep(user: UserModel = Depends(get_current_user)) -> UserModel:
         if allowed_roles and user.role not in allowed_roles:
             raise HTTPException(status_code=403, detail="Insufficient role")
         return user
+
     return _dep

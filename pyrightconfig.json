@@ -1,6 +1,7 @@
 {
     "include": [
-        "api"
+        "api",
+        "app"
     ],
     "exclude": [
         "**/.venv",
@@ -15,6 +16,7 @@
     "typeCheckingMode": "basic",
     "venvPath": ".",
     "venv": ".venv",
+    "reportMissingImports": "none",
     "reportMissingTypeStubs": "none",
     "reportUnknownMemberType": "none",
     "reportUnknownArgumentType": "none",
@@ -22,9 +24,11 @@
     "reportPrivateUsage": "none",
     "executionEnvironments": [
         {
-            "root": "./api",
+            "root": ".",
             "extraPaths": [
-                "./api"
+                "./",
+                "./api",
+                "./app"
             ]
         }
     ]

@@ -1,13 +1,17 @@
 # api/main.py
+from __future__ import annotations
+
 import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api.settings import settings
-from api.db import init_db
-from api.routes_reports import router as reports_router
-from api.routes_exercises import router as exercises_router
-from api.routes_parents import router as parents_router
-from api.routes_ppr import router as ppr_router
+
+from .settings import settings
+from .db import init_db
+from . import routes_reports
+from . import routes_exercises
+from . import routes_parents
+from . import routes_ppr
 
 app = FastAPI(title="Sproki API")
 
@@ -41,7 +45,9 @@ def _startup():
     init_db()
 
 
-app.include_router(reports_router)
-app.include_router(exercises_router)
-app.include_router(parents_router)
-app.include_router(ppr_router)
+# Her antager vi, at hver routes_*.py har: router = APIRouter(...)
+# Pylance kan ikke altid se attribute 'router' på modulet, så vi ignorerer det for type checkeren.
+app.include_router(routes_reports.router)     # type: ignore[attr-defined]
+app.include_router(routes_exercises.router)   # type: ignore[attr-defined]
+app.include_router(routes_parents.router)     # type: ignore[attr-defined]
+app.include_router(routes_ppr.router)         # type: ignore[attr-defined]

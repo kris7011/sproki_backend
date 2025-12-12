@@ -1,27 +1,19 @@
 from __future__ import annotations
-from typing import Optional
-from datetime import datetime
-from sqlmodel import SQLModel, Field
 
+# Backwards-compatible re-exports of learning / threshold / exercise models.
+# All actual SQLModel table definitions live in app.models.
 
-class DomainThreshold(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    domain: str
-    age_years: int
-    age_months: int
-    yellow_min: int
-    green_min: int
+from .models import (  # type: ignore F401
+    Domain,
+    DomainThreshold,
+    ExerciseCategory,
+    ExerciseItem,
+    ExerciseAssignment,
+    ExerciseAttempt,
+    ExerciseProgress,
+)
 
-
-class Exercise(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    domain: str
-    payload_json: str  # JSON blob for content
-
-
-class ExerciseAnswer(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    child_id: int
-    exercise_id: int
-    correct: bool
-    ts_utc: datetime = Field(default_factory=datetime.utcnow)
+# Backwards compatible alias for legacy imports:
+# Older code does: `from app.models_learning import Exercise`
+# We now use ExerciseItem as the concrete table, so map Exercise -> ExerciseItem.
+Exercise = ExerciseItem

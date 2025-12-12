@@ -1,138 +1,152 @@
 # api/routes_reports.py
 from __future__ import annotations
-from typing import Dict, List, Tuple
+
+from typing import List
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
-from api.db import engine
-from api.models_report import Report
-from api.auth import require_roles
-from api.models_user import Role
+from sqlalchemy import desc
+
+from app.auth import require_role, User
+from app.models_report import Domain, ChildReport, ChildReportScore
+from app.report_analysis import compute_report_analysis, ReportAnalysisResult
+from .db import get_session
+
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
-_THRESHOLDS: Dict[str, Dict[str, float]] = {
-    "rim": {"yellow": 40.0, "green": 60.0},
-    "ordforraad": {"yellow": 50.0, "green": 70.0},
-    "udtale": {"yellow": 45.0, "green": 65.0},
-}
+
+def get_db_session() -> Session:
+    return next(get_session())
 
 
-def _zone_and_points(cat: str, score: float) -> Tuple[str, float]:
-    t = _THRESHOLDS.get(cat, {"yellow": 50.0, "green": 70.0})  # <-- fix here
-    if score >= t["green"]:
-        return "green", 0.0
-    if score >= t["yellow"]:
-        return "yellow", max(0.0, t["green"] - score)
-    return "red", max(0.0, t["green"] - score)
+# ---------- Pydantic schemas ----------
 
 
-class ReportItemIn(BaseModel):
-    category: str
-    score: float
+class ReportScoreInput(BaseModel):
+    domain_code: str
+    raw_score: int
 
 
-class ReportUploadIn(BaseModel):
-    age_years: int
+class ChildReportCreate(BaseModel):
+    source: str
     age_months: int
-    items: List[ReportItemIn]
+    scores: List[ReportScoreInput]
 
 
-@router.post("/{child_id}")
-def upload_report(
-    child_id: str,
-    payload: ReportUploadIn,
-    user=Depends(require_roles(Role.LEDER, Role.PERSONALE, Role.PPR)),
-):
-    if not payload.items:
+class DomainAnalysisResponse(BaseModel):
+    domain_code: str
+    domain_name: str
+    raw_score: int
+    zone: str
+    points_to_green: int | None
+
+
+class ChildReportAnalysisResponse(BaseModel):
+    report_id: int
+    child_id: int
+    age_months: int
+    domains: List[DomainAnalysisResponse]
+
+
+# ---------- Helper functions ----------
+
+
+def _get_domain_by_code(session: Session, code: str) -> Domain:
+    statement = select(Domain).where(Domain.code == code)
+    domain = session.exec(statement).first()
+    if domain is None:
         raise HTTPException(
-            status_code=400, detail="Report must include items")
-
-    try:
-        created_ids: List[int] = []
-        with Session(engine) as s:
-            for it in payload.items:
-                zone, pts = _zone_and_points(it.category, it.score)
-                r = Report(
-                    child_id=child_id,
-                    category=it.category,
-                    score=it.score,
-                    color_zone=zone,
-                    points_to_green=pts,
-                    age_years=payload.age_years,
-                    age_months=payload.age_months,
-                )
-                s.add(r)
-                s.commit()
-                s.refresh(r)
-                created_ids.append(int(r.id))
-        return {"ok": True, "report_ids": created_ids}
-    except Exception as e:
-        # TEMP: surface root cause during dev
-        raise HTTPException(
-            status_code=500, detail=f"upload_report failed: {type(e).__name__}: {e}")
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown domain code: {code}",
+        )
+    return domain
 
 
-@router.get("/{child_id}/latest")
-def latest_summary(
-    child_id: str,
-    user=Depends(require_roles(Role.LEDER, Role.PERSONALE, Role.PPR)),
-):
-    try:
-        with Session(engine) as s:
-            rows = s.exec(
-                select(Report)
-                .where(Report.child_id == child_id)
-                .order_by(Report.created_at.desc())
-            ).all()
-
-        latest: Dict[str, Report] = {}
-        for r in rows:
-            if r.category not in latest:
-                latest[r.category] = r
-
-        summary = [
-            {
-                "category": k,
-                "score": v.score,
-                "zone": v.color_zone,
-                "points_to_green": v.points_to_green,
-                "age": {"years": v.age_years, "months": v.age_months},
-                "created_at": v.created_at,
-            }
-            for k, v in latest.items()
-        ]
-        return {"child_id": child_id, "summary": summary}
-    except Exception as e:
-        # TEMP: surface root cause during dev
-        raise HTTPException(
-            status_code=500, detail=f"latest_summary failed: {type(e).__name__}: {e}")
-
-
-@router.get("/{child_id}/history")
-def history(
-    child_id: str,
-    user=Depends(require_roles(Role.LEDER, Role.PERSONALE, Role.PPR)),
-):
-    with Session(engine) as s:
-        rows = s.exec(
-            select(Report)
-            .where(Report.child_id == child_id)
-            .order_by(Report.created_at.desc())
-        ).all()
-    return {
-        "child_id": child_id,
-        "items": [
-            {
-                "id": r.id,
-                "category": r.category,
-                "score": r.score,
-                "zone": r.color_zone,
-                "points_to_green": r.points_to_green,
-                "age_years": r.age_years,
-                "age_months": r.age_months,
-                "created_at": r.created_at,
-            }
-            for r in rows
+def _convert_analysis_to_response(
+    analysis: ReportAnalysisResult,
+) -> ChildReportAnalysisResponse:
+    return ChildReportAnalysisResponse(
+        report_id=analysis.report_id,
+        child_id=analysis.child_id,
+        age_months=analysis.age_months,
+        domains=[
+            DomainAnalysisResponse(
+                domain_code=d.domain_code,
+                domain_name=d.domain_name,
+                raw_score=d.raw_score,
+                zone=d.zone,
+                points_to_green=d.points_to_green,
+            )
+            for d in analysis.domains
         ],
-    }
+    )
+
+
+# ---------- Endpoints ----------
+
+
+@router.post(
+    "/children/{child_id}",
+    response_model=ChildReportAnalysisResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_child_report(
+    child_id: int,
+    payload: ChildReportCreate,
+    user: User = Depends(require_role(["leader", "staff"])),
+    session: Session = Depends(get_db_session),
+):
+    report = ChildReport(
+        child_id=child_id,
+        source=payload.source,
+        age_months=payload.age_months,
+    )
+    session.add(report)
+    session.commit()
+    session.refresh(report)
+
+    # Efter commit har report.id en værdi
+    assert report.id is not None, "Report must have id after commit"
+
+    for s in payload.scores:
+        domain = _get_domain_by_code(session, s.domain_code)
+        assert domain.id is not None, "Domain must have id in DB"
+
+        score = ChildReportScore(
+            report_id=report.id,
+            domain_id=domain.id,
+            raw_score=s.raw_score,
+        )
+        session.add(score)
+
+    session.commit()
+
+    analysis = compute_report_analysis(session=session, report=report)
+    return _convert_analysis_to_response(analysis)
+
+
+@router.get(
+    "/children/{child_id}/latest",
+    response_model=ChildReportAnalysisResponse,
+)
+def get_latest_child_report_analysis(
+    child_id: int,
+    user: User = Depends(require_role(["leader", "staff", "parent", "ppr"])),
+    session: Session = Depends(get_db_session),
+):
+    statement = (
+        select(ChildReport)
+        .where(ChildReport.child_id == child_id)
+        .order_by(desc(ChildReport.created_at))
+    )
+    report = session.exec(statement).first()
+    if report is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No report found for this child",
+        )
+
+    analysis = compute_report_analysis(session=session, report=report)
+    return _convert_analysis_to_response(analysis)

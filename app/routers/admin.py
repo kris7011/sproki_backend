@@ -21,7 +21,7 @@ from app.models_institution import (
 )
 
 # Øvelser og thresholds (matcher din øvrige kodebase)
-from app.models_learning import Exercise, DomainThreshold
+from app.models import Domain, DomainThreshold, ExerciseAssignment, ExerciseAttempt, ExerciseCategory, ExerciseItem, ExerciseProgress
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -158,7 +158,8 @@ def _ensure_parent_links(session: Session, pairs: List[Tuple[Child, str, str]]) 
             )
         ).first()
         if not link:
-            session.add(ChildParentLink(child_id=child_id, parent_id=parent_id))
+            session.add(ChildParentLink(
+                child_id=child_id, parent_id=parent_id))
             session.commit()
             created += 1
     return created
@@ -180,86 +181,132 @@ def _ensure_staff_links(session: Session, pairs: List[Tuple[int, int]]) -> int:
 
 
 def _ensure_exercises(session: Session) -> int:
-    defs: List[Dict[str, Any]] = [
+    """
+    Opretter:
+    - ExerciseCategory per domain
+    - ExerciseItem (øvelser) under hver kategori
+    """
+    defs = [
         {
-            "domain": "rim",
-            "title": "Rim: kat-hat",
-            "payload": {"type": "rim", "prompt": "Find ord der rimer på 'kat'"},
+            "domain_code": "rim",
+            "category_code": "rim_basic",
+            "category_title": "Rim – grundøvelser",
+            "items": [
+                {"prompt": "Find ord der rimer på 'kat'"},
+                {"prompt": "Hvilke ord rimer på 'sol'?"},
+            ],
         },
         {
-            "domain": "rim",
-            "title": "Rim: sol-bol",
-            "payload": {"type": "rim", "prompt": "Hvilke ord rimer på 'sol'?"},
-        },
-        {
-            "domain": "ordforraad",
-            "title": "Ord: frugt",
-            "payload": {"type": "ordforraad", "prompt": "Peg på en banan"},
-        },
-        {
-            "domain": "ordforraad",
-            "title": "Ord: dyr",
-            "payload": {"type": "ordforraad", "prompt": "Vis mig en hest"},
+            "domain_code": "ordforraad",
+            "category_code": "ord_basic",
+            "category_title": "Ordforråd – grundøvelser",
+            "items": [
+                {"prompt": "Peg på en banan"},
+                {"prompt": "Vis mig en hest"},
+            ],
         },
     ]
+
     created = 0
+
     for d in defs:
-        dom = cast(str, d["domain"])
-        payload_dict = cast(dict, d["payload"])
-        existing = None
-        if hasattr(Exercise, "title"):
-            existing = session.exec(
-                select(Exercise).where(
-                    Exercise.domain == dom,
-                    getattr(Exercise, "title") == cast(
-                        str, d["title"]  # type: ignore[attr-defined]
-                    ),
+        domain = session.exec(
+            select(Domain).where(Domain.code == cast(str, d["domain_code"]))
+        ).first()
+        if not domain:
+            continue
+
+        domain_id = _id_or_500(domain.id, "Domain")
+
+        # Category
+        category = session.exec(
+            select(ExerciseCategory).where(
+                ExerciseCategory.domain_id == domain_id,
+                ExerciseCategory.code == cast(str, d["category_code"]),
+            )
+        ).first()
+
+        if not category:
+            category = ExerciseCategory(
+                domain_id=domain_id,
+                code=cast(str, d["category_code"]),
+                title=cast(str, d["category_title"]),
+            )
+            session.add(category)
+            session.commit()
+            session.refresh(category)
+            created += 1
+
+        category_id = _id_or_500(category.id, "ExerciseCategory")
+
+        # Items
+        for item_def in cast(list, d["items"]):
+            prompt = cast(str, item_def["prompt"])
+
+            exists = session.exec(
+                select(ExerciseItem).where(
+                    ExerciseItem.category_id == category_id,
+                    ExerciseItem.prompt == prompt,
                 )
             ).first()
-        else:
-            existing = session.exec(select(Exercise).where(Exercise.domain == dom)).first()
-        if existing:
-            continue
-        ex = Exercise(domain=dom, payload_json=json.dumps(payload_dict))
-        if hasattr(ex, "title"):
-            setattr(ex, "title", cast(str, d["title"]))
-        session.add(ex)
-        session.commit()
-        created += 1
+            if exists:
+                continue
+
+            session.add(
+                ExerciseItem(
+                    category_id=category_id,
+                    prompt=prompt,
+                )
+            )
+            session.commit()
+            created += 1
+
     return created
 
 
 def _ensure_thresholds(session: Session) -> int:
-    th_defs: List[Tuple[str, int, int, int, int]] = [
-        ("rim", 4, 0, 35, 50),
-        ("rim", 4, 6, 40, 55),
-        ("rim", 5, 0, 45, 60),
-        ("ordforraad", 4, 0, 40, 55),
-        ("ordforraad", 4, 6, 45, 60),
-        ("ordforraad", 5, 0, 50, 65),
+    defs = [
+        ("rim", 4, 0, 4, 11, 50, 40),
+        ("rim", 5, 0, 5, 11, 60, 45),
+        ("ordforraad", 4, 0, 4, 11, 55, 40),
+        ("ordforraad", 5, 0, 5, 11, 65, 50),
     ]
+
     created = 0
-    for dom, yy, mm, y_min, g_min in th_defs:
+
+    for code, y_min, m_min, y_max, m_max, green, yellow in defs:
+        domain = session.exec(
+            select(Domain).where(Domain.code == code)
+        ).first()
+        if not domain:
+            continue
+
         exists = session.exec(
             select(DomainThreshold).where(
-                DomainThreshold.domain == dom,
-                DomainThreshold.age_years == yy,
-                DomainThreshold.age_months == mm,
+                DomainThreshold.domain_id == domain.id,
+                DomainThreshold.age_years_min == y_min,
+                DomainThreshold.age_months_min == m_min,
+                DomainThreshold.age_years_max == y_max,
+                DomainThreshold.age_months_max == m_max,
             )
         ).first()
         if exists:
             continue
+
         session.add(
             DomainThreshold(
-                domain=dom,
-                age_years=yy,
-                age_months=mm,
-                yellow_min=y_min,
-                green_min=g_min,
+                domain_id=domain.id,
+                age_years_min=y_min,
+                age_months_min=m_min,
+                age_years_max=y_max,
+                age_months_max=m_max,
+                score_min_green=green,
+                score_min_yellow=yellow,
             )
         )
         session.commit()
         created += 1
+
     return created
 
 
@@ -275,7 +322,8 @@ def seed_demo_data(
     """
 
     # Institution
-    _, inst_created, inst_id = _seed_institution(session)  # <- inst erstattet af "_"
+    _, inst_created, inst_id = _seed_institution(
+        session)  # <- inst erstattet af "_"
 
     # Staff
     staff_list, staff_created = _seed_staff(session, inst_id)
@@ -296,8 +344,11 @@ def seed_demo_data(
     links_parent_created = _ensure_parent_links(session, parent_pairs)
 
     # Staff links (brug præcis type for at tilfredsstille Pyright)
-    staff_pairs: List[Tuple[int, int]] = [(c1_id, s1_id), (c1_id, s2_id), (c2_id, s2_id)]
+    staff_pairs: List[Tuple[int, int]] = [
+        (c1_id, s1_id), (c1_id, s2_id), (c2_id, s2_id)]
     links_staff_created = _ensure_staff_links(session, staff_pairs)
+
+    domains_created = _ensure_domains(session)
 
     # Exercises
     exercises_created = _ensure_exercises(session)
@@ -311,6 +362,7 @@ def seed_demo_data(
         "children": {"ids": [c1_id, c2_id], "created": children_created},
         "staff": {"ids": [s1_id, s2_id], "created": staff_created},
         "links": {"parents_created": links_parent_created, "staff_created": links_staff_created},
+        "domains_created": domains_created,
         "exercises_created": exercises_created,
         "thresholds_created": thresholds_created,
     }
@@ -331,8 +383,17 @@ def clear_demo_data(
         session.commit()
         return len(rows)
 
+    deleted_counts["ExerciseProgress"] = _delete(ExerciseProgress)
+
+    deleted_counts["ExerciseAttempt"] = _delete(ExerciseAttempt)
+    deleted_counts["ExerciseAssignment"] = _delete(ExerciseAssignment)
+
+    deleted_counts["ExerciseItem"] = _delete(ExerciseItem)
+    deleted_counts["ExerciseCategory"] = _delete(ExerciseCategory)
+
     deleted_counts["DomainThreshold"] = _delete(DomainThreshold)
-    deleted_counts["Exercise"] = _delete(Exercise)
+    deleted_counts["Domain"] = _delete(Domain)
+
     deleted_counts["ChildStaffLink"] = _delete(ChildStaffLink)
     deleted_counts["ChildParentLink"] = _delete(ChildParentLink)
     deleted_counts["Parent"] = _delete(Parent)
@@ -341,3 +402,25 @@ def clear_demo_data(
     deleted_counts["Institution"] = _delete(Institution)
 
     return {"cleared": True, "deleted": deleted_counts}
+
+
+def _ensure_domains(session: Session) -> int:
+    defs = [
+        ("rim", "Rim"),
+        ("ordforraad", "Ordforråd"),
+    ]
+
+    created = 0
+
+    for code, display in defs:
+        exists = session.exec(select(Domain).where(
+            Domain.code == code)).first()
+        if exists:
+            continue
+
+        # domain.name er NOT NULL i din DB -> skal udfyldes
+        session.add(Domain(code=code, name=display, title=display))
+        session.commit()
+        created += 1
+
+    return created

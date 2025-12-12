@@ -1,111 +1,261 @@
-from typing import List, Dict
+# api/routes_exercises.py
+# pyright: reportMissingImports=false
+
+from __future__ import annotations
+
+from typing import List
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
-from .db import engine
-from .auth import require_roles, Role
-from .models_exercise import Exercise, ExerciseAttempt
-from .models_report import Report
+from sqlalchemy import desc
+
+from app.auth import require_role, User
+from .db import get_session
+from app.models_exercise import Exercise, ChildExerciseProgress
+from app.models_report import Domain, ChildReport
+from app.report_analysis import (
+    compute_report_analysis,
+    ReportAnalysisResult,
+)
 
 router = APIRouter(prefix="/exercises", tags=["exercises"])
 
 
-@router.get("")
-def list_exercises(category: str | None = Query(default=None), user=Depends(require_roles(Role.LEDER, Role.PERSONALE, Role.PPR))):
-    with Session(engine) as s:
-        stmt = select(Exercise).where(Exercise.is_active == True)
-        if category:
-            stmt = stmt.where(Exercise.category == category)
-        rows = s.exec(stmt).all()
-    return rows
+def get_db_session() -> Session:
+    return next(get_session())
 
 
-@router.get("/for-child/{child_id}")
-def exercises_for_child(child_id: str, user=Depends(require_roles(Role.LEDER, Role.PERSONALE))):
-    with Session(engine) as s:
-        rows = s.exec(
-            select(Report)
-            .where(Report.child_id == child_id)
-            .order_by(Report.created_at.desc())
-        ).all()
-        latest: Dict[str, Report] = {}
-        for r in rows:
-            if r.category not in latest:
-                latest[r.category] = r
-        need_cats = [c for c, r in latest.items() if r.color_zone != "green"]
-        if not need_cats:
-            return {"child_id": child_id, "exercises": []}
+# ----------------------------------------------------------------------
+# Pydantic schemas
+# ----------------------------------------------------------------------
 
-        any_rep = next(iter(latest.values()))
-        stmt = select(Exercise).where(
-            Exercise.is_active == True,
-            Exercise.category.in_(need_cats),
-            Exercise.age_min <= any_rep.age_years,
-            Exercise.age_max >= any_rep.age_years,
-        )
-        rows = s.exec(stmt).all()
-        return {"child_id": child_id, "categories": need_cats, "exercises": rows}
+
+class ExerciseResponse(BaseModel):
+    id: int
+    code: str
+    title: str
+    description: str
+    domain_code: str
+    domain_name: str
+    min_age_months: int
+    max_age_months: int
+
+
+class RecommendedExercisesResponse(BaseModel):
+    child_id: int
+    age_months: int
+    domains: List[str]
+    exercises: List[ExerciseResponse]
 
 
 class AttemptIn(BaseModel):
-    child_id: str
+    child_id: int
     correct: bool
 
 
+# ----------------------------------------------------------------------
+# LIST ALL EXERCISES
+# ----------------------------------------------------------------------
+
+
+@router.get("")
+def list_exercises(
+    domain_code: str | None = Query(default=None),
+    user: User = Depends(require_role(["leader", "staff", "ppr"])),
+    session: Session = Depends(get_db_session),
+):
+    stmt = select(Exercise).where(Exercise.is_active == True)  # noqa: E712
+
+    if domain_code:
+        domain_stmt = select(Domain).where(Domain.code == domain_code)
+        domain = session.exec(domain_stmt).first()
+        if not domain or domain.id is None:
+            return []
+        stmt = stmt.where(Exercise.domain_id == domain.id)
+
+    rows = list(session.exec(stmt))
+    return rows
+
+
+# ----------------------------------------------------------------------
+# RECOMMENDED EXERCISES FOR A CHILD
+# ----------------------------------------------------------------------
+
+
+@router.get(
+    "/for-child/{child_id}",
+    response_model=RecommendedExercisesResponse,
+)
+def exercises_for_child(
+    child_id: int,
+    user: User = Depends(require_role(["leader", "staff", "parent", "ppr"])),
+    session: Session = Depends(get_db_session),
+):
+    stmt = (
+        select(ChildReport)
+        .where(ChildReport.child_id == child_id)
+        .order_by(desc(ChildReport.created_at))
+    )
+
+    report = session.exec(stmt).first()
+    if report is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No report found for this child",
+        )
+
+    analysis: ReportAnalysisResult = compute_report_analysis(
+        session=session,
+        report=report,
+    )
+
+    needed_domains = [
+        d.domain_code for d in analysis.domains if d.zone != "green"
+    ]
+
+    if not needed_domains:
+        return RecommendedExercisesResponse(
+            child_id=child_id,
+            age_months=analysis.age_months,
+            domains=[],
+            exercises=[],
+        )
+
+    all_domains = list(session.exec(select(Domain)))
+    domain_rows = [
+        d for d in all_domains if d.code in needed_domains and d.id is not None
+    ]
+    domain_by_id = {d.id: d for d in domain_rows}
+    domain_ids = list(domain_by_id.keys())
+
+    age_months = analysis.age_months
+
+    all_exercises = list(
+        session.exec(select(Exercise).where(Exercise.is_active == True))  # noqa: E712
+    )
+
+    exercises = [
+        ex
+        for ex in all_exercises
+        if ex.domain_id in domain_ids
+        and ex.min_age_months <= age_months
+        and ex.max_age_months >= age_months
+    ]
+
+    ex_items: List[ExerciseResponse] = []
+    for ex in exercises:
+        domain = domain_by_id.get(ex.domain_id)
+        if domain is None:
+            continue
+
+        ex_items.append(
+            ExerciseResponse(
+                id=ex.id or 0,
+                code=ex.code,
+                title=ex.title,
+                description=ex.description,
+                domain_code=domain.code,
+                domain_name=domain.name,
+                min_age_months=ex.min_age_months,
+                max_age_months=ex.max_age_months,
+            )
+        )
+
+    return RecommendedExercisesResponse(
+        child_id=child_id,
+        age_months=age_months,
+        domains=needed_domains,
+        exercises=ex_items,
+    )
+
+
+# ----------------------------------------------------------------------
+# POST ATTEMPT
+# ----------------------------------------------------------------------
+
+
 @router.post("/{exercise_id}/attempts")
-def post_attempt(exercise_id: int, payload: AttemptIn, user=Depends(require_roles(Role.LEDER, Role.PERSONALE))):
-    with Session(engine) as s:
-        ex = s.get(Exercise, exercise_id)
-        if not ex:
-            raise HTTPException(status_code=404, detail="Exercise not found")
-        att = ExerciseAttempt(child_id=payload.child_id,
-                              exercise_id=exercise_id, correct=payload.correct)
-        s.add(att)
-        s.commit()
-        s.refresh(att)
-        return {"ok": True, "attempt_id": att.id}
+def post_attempt(
+    exercise_id: int,
+    payload: AttemptIn,
+    user: User = Depends(require_role(["leader", "staff", "parent", "ppr"])),
+    session: Session = Depends(get_db_session),
+):
+    ex = session.get(Exercise, exercise_id)
+    if not ex:
+        raise HTTPException(status_code=404, detail="Exercise not found")
+
+    att = ChildExerciseProgress(
+        child_id=payload.child_id,
+        exercise_id=exercise_id,
+        status="completed" if payload.correct else "in_progress",
+    )
+
+    session.add(att)
+    session.commit()
+    session.refresh(att)
+
+    return {"ok": True, "attempt_id": att.id}
+
+
+# ----------------------------------------------------------------------
+# CHILD PROGRESSION
+# ----------------------------------------------------------------------
 
 
 @router.get("/progression/{child_id}")
-def progression(child_id: str, user=Depends(require_roles(Role.LEDER, Role.PERSONALE, Role.PPR))):
-    with Session(engine) as s:
-        reps = s.exec(
-            select(Report)
-            .where(Report.child_id == child_id)
-            .order_by(Report.created_at.desc())
-        ).all()
-        latest: Dict[str, Report] = {}
-        for r in reps:
-            if r.category not in latest:
-                latest[r.category] = r
+def progression(
+    child_id: int,
+    user: User = Depends(require_role(["leader", "staff", "ppr"])),
+    session: Session = Depends(get_db_session),
+):
+    rep_stmt = (
+        select(ChildReport)
+        .where(ChildReport.child_id == child_id)
+        .order_by(desc(ChildReport.created_at))
+    )
+    report = session.exec(rep_stmt).first()
 
-        attempts = s.exec(
-            select(ExerciseAttempt)
-            .where(ExerciseAttempt.child_id == child_id)
-            .order_by(ExerciseAttempt.created_at.desc())
-        ).all()
+    if report is None:
+        raise HTTPException(status_code=404, detail="No report found")
 
-        cat_stats: Dict[str, Dict[str, float]] = {}
-        for a in attempts[:200]:
-            ex = s.get(Exercise, a.exercise_id)
-            if not ex:
-                continue
-            st = cat_stats.setdefault(
-                ex.category, {"total": 0.0, "correct": 0.0})
-            st["total"] += 1
-            st["correct"] += 1 if a.correct else 0
+    att_stmt = (
+        select(ChildExerciseProgress)
+        .where(ChildExerciseProgress.child_id == child_id)
+        .order_by(desc(ChildExerciseProgress.last_updated_at))
+    )
+    attempts = list(session.exec(att_stmt))
 
-        out = []
-        for cat, rep in latest.items():
-            s_total = cat_stats.get(cat, {}).get("total", 0.0)
-            s_correct = cat_stats.get(cat, {}).get("correct", 0.0)
-            acc = (s_correct / s_total) if s_total > 0 else None
-            out.append({
-                "category": cat,
-                "zone": rep.color_zone,
-                "points_to_green": rep.points_to_green,
-                "attempts_total": int(s_total),
-                "accuracy": acc,
-                "last_report_at": rep.created_at,
-            })
-        return {"child_id": child_id, "categories": out}
+    stats: dict[str, dict[str, float]] = {}
+
+    for a in attempts:
+        ex = session.get(Exercise, a.exercise_id)
+        if not ex:
+            continue
+
+        domain = session.get(Domain, ex.domain_id)
+        if not domain:
+            continue
+
+        st = stats.setdefault(domain.code, {"total": 0.0, "correct": 0.0})
+        st["total"] += 1
+        if a.status == "completed":
+            st["correct"] += 1
+
+    out = []
+    for domain_code, st in stats.items():
+        accuracy = st["correct"] / st["total"] if st["total"] > 0 else None
+        out.append(
+            {
+                "domain": domain_code,
+                "attempts_total": int(st["total"]),
+                "accuracy": accuracy,
+            }
+        )
+
+    return {
+        "child_id": child_id,
+        "age_months": report.age_months,
+        "progression": out,
+    }

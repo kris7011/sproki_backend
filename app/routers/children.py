@@ -1,5 +1,4 @@
 # app/routers/children.py
-
 from __future__ import annotations
 
 from typing import Optional, List, Dict
@@ -10,18 +9,19 @@ from sqlmodel import select
 
 from app.db import get_session
 from app.models import Child
-from app.services.training import analyze_domain_scores, build_training_plan, ensure_assignments_for_child  # SQLModel table
+from app.services.training import (
+    analyze_domain_scores,
+    build_training_plan,
+    ensure_assignments_for_child,
+)
 
 router = APIRouter(
     prefix="/children",
     tags=["children"],
 )
 
-# Shared literals
 CHILD_NOT_FOUND_MSG = "Child not found"
 
-
-# ---------- Pydantic schemas ----------
 
 class ChildCreate(BaseModel):
     name: str
@@ -64,11 +64,8 @@ class AnalyzeResponse(BaseModel):
     plan: Dict[str, Dict]
 
 
-# ---------- CRUD Routes ----------
-
 @router.post("/", response_model=ChildRead)
-def create_child(body: ChildCreate):
-    # Create a new child
+def create_child(body: ChildCreate) -> Child:
     with get_session() as session:
         child = Child(
             name=body.name,
@@ -84,17 +81,14 @@ def create_child(body: ChildCreate):
 
 
 @router.get("/", response_model=List[ChildRead])
-def list_children():
-    # Return all children
+def list_children() -> List[Child]:
     with get_session() as session:
         stmt = select(Child)
-        results = session.exec(stmt).all()
-        return results
+        return session.exec(stmt).all()
 
 
 @router.get("/{child_id}", response_model=ChildRead)
-def get_child(child_id: int):
-    # Return a single child by id
+def get_child(child_id: int) -> Child:
     with get_session() as session:
         child = session.get(Child, child_id)
         if not child:
@@ -103,8 +97,7 @@ def get_child(child_id: int):
 
 
 @router.patch("/{child_id}", response_model=ChildRead)
-def update_child(child_id: int, body: ChildPatch):
-    # Simple partial update
+def update_child(child_id: int, body: ChildPatch) -> Child:
     with get_session() as session:
         child = session.get(Child, child_id)
         if not child:
@@ -128,8 +121,7 @@ def update_child(child_id: int, body: ChildPatch):
 
 
 @router.delete("/{child_id}")
-def delete_child(child_id: int):
-    # Delete a child
+def delete_child(child_id: int) -> dict:
     with get_session() as session:
         child = session.get(Child, child_id)
         if not child:
@@ -140,10 +132,8 @@ def delete_child(child_id: int):
         return {"ok": True}
 
 
-# ---------- Analyse + træningsplan ----------
-
 @router.post("/{child_id}/analyze-and-plan", response_model=AnalyzeResponse)
-def analyze_and_plan(child_id: int, body: AnalyzeRequest):
+def analyze_and_plan(child_id: int, body: AnalyzeRequest) -> AnalyzeResponse:
     """
     Input: domænescorer fra sprogvurderings-rapporten.
     Output:

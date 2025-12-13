@@ -73,7 +73,8 @@ class Domain(SQLModel, table=True):
 
 
 class DomainThreshold(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
+
     domain_id: int = Field(foreign_key=FK_DOMAIN_ID)
 
     age_years_min: int

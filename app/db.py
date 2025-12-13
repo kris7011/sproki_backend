@@ -43,7 +43,7 @@ def get_session() -> Session:
 
     eller
 
-        with get_session() as session:
+        with open_session() as session:
             ...
 
     (Session er selv en context manager.)

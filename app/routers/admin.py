@@ -275,15 +275,16 @@ def _ensure_thresholds(session: Session) -> int:
     created = 0
 
     for code, y_min, m_min, y_max, m_max, green, yellow in defs:
-        domain = session.exec(
-            select(Domain).where(Domain.code == code)
-        ).first()
+        domain = session.exec(select(Domain).where(
+            Domain.code == code)).first()
         if not domain:
             continue
 
+        domain_id = _id_or_500(domain.id, "Domain")
+
         exists = session.exec(
             select(DomainThreshold).where(
-                DomainThreshold.domain_id == domain.id,
+                DomainThreshold.domain_id == domain_id,
                 DomainThreshold.age_years_min == y_min,
                 DomainThreshold.age_months_min == m_min,
                 DomainThreshold.age_years_max == y_max,
@@ -295,7 +296,8 @@ def _ensure_thresholds(session: Session) -> int:
 
         session.add(
             DomainThreshold(
-                domain_id=domain.id,
+                id=None,
+                domain_id=domain_id,
                 age_years_min=y_min,
                 age_months_min=m_min,
                 age_years_max=y_max,

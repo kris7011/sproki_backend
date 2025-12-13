@@ -7,13 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
 from app.db import get_session
-from app.models import (
-    Child,
-    ExerciseCategory,
-    ExerciseItem,
-    ExerciseAssignment,
-    ExerciseProgress,
-)
+from app.models import Child, ExerciseAssignment, ExerciseCategory, ExerciseItem, Domain, ExerciseProgress
 
 router = APIRouter(prefix="/exercises", tags=["exercises"])
 

@@ -5,14 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlmodel import Session, select
 from app.db import get_session
-from app.models import (
-    Child,
-    ExerciseItem,
-    ExerciseAttempt,
-    ExerciseProgress,
-    ExerciseCategory,
-    ExerciseAssignment,
-)
+from app.models import Child, ExerciseAssignment, ExerciseAttempt, ExerciseCategory, ExerciseItem, ExerciseProgress
 
 router = APIRouter(prefix="/progress", tags=["progress"])
 

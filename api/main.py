@@ -35,6 +35,11 @@ app.add_middleware(
 )
 
 
+@app.get("/")
+def root():
+    return {"ok": True, "service": "sproki-backend"}
+
+
 @app.get("/health")
 def health():
     return {"ok": True}

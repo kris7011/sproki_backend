@@ -51,6 +51,11 @@ def health():
     return {"ok": True}
 
 
+@app.get("/version")
+def version():
+    return {"version": "f150943"}
+
+
 @app.on_event("startup")
 def _startup():
     init_db()

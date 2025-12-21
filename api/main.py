@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 
 from fastapi import FastAPI
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from .settings import settings
@@ -35,9 +36,14 @@ app.add_middleware(
 )
 
 
-@app.api_route("/", methods=["GET", "HEAD"])
+@app.get("/")
 def root():
     return {"ok": True, "service": "sproki-backend"}
+
+
+@app.head("/")
+def root_head():
+    return Response(status_code=200)
 
 
 @app.get("/health")

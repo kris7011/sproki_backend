@@ -35,7 +35,7 @@ app.add_middleware(
 )
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return {"ok": True, "service": "sproki-backend"}
 

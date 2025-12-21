@@ -49,3 +49,7 @@ SUPABASE_JWT_AUDIENCE=authenticated
 SUPABASE_ANON_KEY=sb_publishable_1NbDihrYplvqLX-MOrLiZA_4R6d55X9
 REQUIRE_SUPABASE=0
 ENV
+
+# Start test miljø
+source .venv/bin/activate
+uvicorn api.main:app --reload

@@ -1,25 +1,18 @@
-# api/models_institution.py
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, List, TYPE_CHECKING
 
-from sqlmodel import SQLModel, Field
+from sqlmodel import SQLModel, Field, Relationship
+
+if TYPE_CHECKING:
+    from api.models_user import User, Invite
 
 
-class Child(SQLModel):
-    """
-    Lightweight API schema used for linking reports and exercises
-    to a specific child and institution.
+class Institution(SQLModel, table=True):
+    __tablename__ = "institution"  # type: ignore[assignment]
+    __table_args__ = {"extend_existing": True}
 
-    This is intentionally NOT mapped as a table (no `table=True`),
-    because the real Child ORM model lives in app.models.Child.
-    """
-    id: str = Field(index=True)
-    name: Optional[str] = None
+    id: Optional[int] = Field(default=None, primary_key=True)
 
-    # Optional: age info if you want it later for age-based exercises
-    age_years: Optional[int] = None
-    age_months: Optional[int] = None
-
-    # Link to institution (matches institution_id used in routes_institutions.py)
-    institution_id: Optional[int] = Field(default=None, index=True)
+    users: List["User"] = Relationship(back_populates="institution")
+    invites: List["Invite"] = Relationship(back_populates="institution")

@@ -9,8 +9,10 @@ from app.models import (
     Domain,
     DomainThreshold,
     ExerciseCategory,
-    ExerciseItem,
+    ExerciseItem
 )
+
+from app.models_exercise import Exercise
 
 
 def seed_initial_data() -> None:
@@ -63,7 +65,12 @@ def seed_initial_data() -> None:
         session.refresh(child)
 
         # Domæne + thresholds
-        domain_rim = Domain(code="rim", title="Rim og lydleg")
+        domain_rim = Domain(
+            code="rim",
+            name="Rim",
+            title="Rim og lydleg",
+        )
+
         session.add(domain_rim)
         session.commit()
         session.refresh(domain_rim)
@@ -114,6 +121,22 @@ def seed_initial_data() -> None:
 
         session.commit()
         print("Seed completed.")
+
+        # Exercise (den tabel /exercises læser fra)
+        ex1 = Exercise(
+            domain=domain_rim.code,  # "rim"
+            title="Rim: kat",
+            description="Enkel rim-øvelse",
+            min_age_months=48,
+            max_age_months=71,
+            content_ref=None,
+            mastery_target_correct=8,
+            mastery_window=10,
+            is_active=True,
+        )
+
+        session.add(ex1)
+        session.commit()
 
 
 if __name__ == "__main__":

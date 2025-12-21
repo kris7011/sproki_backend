@@ -9,6 +9,39 @@ from sqlmodel import SQLModel, Field
 from app.models import FK_CHILD_ID, FK_EXERCISEITEM_ID
 
 
+# MVP:
+# Hold Domain fleksibel indtil vi låser en fast liste af kategorier.
+# Brug strings som: "rhyme", "vocabulary", "phonology", "grammar", "unknown", ...
+Domain = str
+
+
+class Threshold(SQLModel, table=True):
+    """
+    Aldersbestemte grænser for farvezoner pr. domain.
+
+    Zone-regel (MVP):
+      - green  hvis score >= green_min
+      - yellow hvis score >= yellow_min
+      - red    ellers
+
+    age_months_from/to: inclusive bounds i måneder.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    domain: Domain = Field(index=True)
+
+    # Alder i måneder (inklusive bounds)
+    age_months_from: int = Field(index=True)
+    age_months_to: int = Field(index=True)
+
+    # Minimumscore for zoner
+    green_min: int = Field(default=0)
+    yellow_min: int = Field(default=0)
+
+    # Evt. note til admin/debug
+    note: Optional[str] = None
+
+
 class ChildReport(SQLModel, table=True):
     """
     Simpel rapport pr. barn.
@@ -38,6 +71,9 @@ class ChildReportScore(SQLModel, table=True):
     """
     Enkelt-score pr. opgave/øvelse i en rapport.
     Igen: ingen Relationship(...) for at undgå generics-problemer.
+
+    IMPORTANT:
+    'domain' bruges til rapport-analyse (grøn/gul/rød pr. kategori).
     """
     id: Optional[int] = Field(default=None, primary_key=True)
 
@@ -46,6 +82,9 @@ class ChildReportScore(SQLModel, table=True):
 
     # FK til ExerciseItem (den konkrete øvelse)
     item_id: int = Field(foreign_key=FK_EXERCISEITEM_ID, index=True)
+
+    # Kategori til analyse (rim/ordforråd/...)
+    domain: Domain = Field(default="unknown", index=True)
 
     # Selve scoren – tilpas felter efter hvad du reelt bruger
     score: int = Field(default=0)

@@ -1,28 +1,13 @@
-# app/models_institution.py
 from __future__ import annotations
 
-"""
-Backwards-compatible re-exports of institution- and child-related models.
+from typing import Optional
+from sqlmodel import SQLModel, Field
 
-Historically, some code imported these models from app.models_institution.
-All actual SQLModel table definitions now live in app.models, so this module
-just re-exports them to avoid breaking older imports.
-"""
 
-from .models import (  # noqa: F401
-    Child,
-    Parent,
-    Staff,
-    Institution,
-    ChildParentLink,
-    ChildStaffLink,
-)
+class Institution(SQLModel, table=True):
+    __tablename__ = "institution"  # type: ignore[assignment]
+    __table_args__ = {"extend_existing": True}
 
-__all__ = [
-    "Child",
-    "Parent",
-    "Staff",
-    "Institution",
-    "ChildParentLink",
-    "ChildStaffLink",
-]
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    # Fjern users/invites Relationship her – det kan vi tilføje senere, når alt kører stabilt

@@ -1,17 +1,14 @@
 # app/models_report.py
 from __future__ import annotations
-
 from datetime import datetime
 from typing import Optional
-
 from sqlmodel import SQLModel, Field
-
 from app.models import FK_CHILD_ID, FK_EXERCISEITEM_ID
 
+# Keep this alias because report_analysis imports Domain
+Domain = str
 
-# MVP:
-# Hold Domain fleksibel indtil vi låser en fast liste af kategorier.
-# Brug strings som: "rim", "vocabulary", "phonology", "grammar", "unknown", ...
+# (Optional) If you like DomainStr naming, keep it too
 DomainStr = str
 
 

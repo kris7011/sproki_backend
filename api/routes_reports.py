@@ -5,24 +5,19 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlmodel import Session, select
 from sqlalchemy import desc
+from sqlmodel import Session, select
 
 from app.auth import require_role, User
-from app.models_report import Domain, ChildReport, ChildReportScore
+from app.models import Domain as DomainModel
+from app.models_report import ChildReport, ChildReportScore
 from app.report_analysis import compute_report_analysis, ReportAnalysisResult
 from .db import get_session
-
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
 
-def get_db_session() -> Session:
-    return next(get_session())
-
-
 # ---------- Pydantic schemas ----------
-
 
 class ReportScoreInput(BaseModel):
     domain_code: str
@@ -52,9 +47,8 @@ class ChildReportAnalysisResponse(BaseModel):
 
 # ---------- Helper functions ----------
 
-
-def _get_domain_by_code(session: Session, code: str) -> Domain:
-    statement = select(Domain).where(Domain.code == code)
+def _get_domain_by_code(session: Session, code: str) -> DomainModel:
+    statement = select(DomainModel).where(DomainModel.code == code)
     domain = session.exec(statement).first()
     if domain is None:
         raise HTTPException(
@@ -64,9 +58,7 @@ def _get_domain_by_code(session: Session, code: str) -> Domain:
     return domain
 
 
-def _convert_analysis_to_response(
-    analysis: ReportAnalysisResult,
-) -> ChildReportAnalysisResponse:
+def _convert_analysis_to_response(analysis: ReportAnalysisResult) -> ChildReportAnalysisResponse:
     return ChildReportAnalysisResponse(
         report_id=analysis.report_id,
         child_id=analysis.child_id,
@@ -86,7 +78,6 @@ def _convert_analysis_to_response(
 
 # ---------- Endpoints ----------
 
-
 @router.post(
     "/children/{child_id}",
     response_model=ChildReportAnalysisResponse,
@@ -96,7 +87,7 @@ def create_child_report(
     child_id: int,
     payload: ChildReportCreate,
     user: User = Depends(require_role(["leader", "staff"])),
-    session: Session = Depends(get_db_session),
+    session: Session = Depends(get_session),
 ):
     report = ChildReport(
         child_id=child_id,
@@ -107,7 +98,6 @@ def create_child_report(
     session.commit()
     session.refresh(report)
 
-    # Efter commit har report.id en værdi
     assert report.id is not None, "Report must have id after commit"
 
     for s in payload.scores:
@@ -118,6 +108,10 @@ def create_child_report(
             report_id=report.id,
             domain_id=domain.id,
             raw_score=s.raw_score,
+
+            # nice-to-have: keep legacy fields aligned
+            domain=domain.code,
+            score=s.raw_score,
         )
         session.add(score)
 
@@ -134,7 +128,7 @@ def create_child_report(
 def get_latest_child_report_analysis(
     child_id: int,
     user: User = Depends(require_role(["leader", "staff", "parent", "ppr"])),
-    session: Session = Depends(get_db_session),
+    session: Session = Depends(get_session),
 ):
     statement = (
         select(ChildReport)

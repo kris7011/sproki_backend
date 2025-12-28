@@ -11,82 +11,63 @@ from app.models import FK_CHILD_ID, FK_EXERCISEITEM_ID
 
 # MVP:
 # Hold Domain fleksibel indtil vi låser en fast liste af kategorier.
-# Brug strings som: "rhyme", "vocabulary", "phonology", "grammar", "unknown", ...
-Domain = str
+# Brug strings som: "rim", "vocabulary", "phonology", "grammar", "unknown", ...
+DomainStr = str
 
 
 class Threshold(SQLModel, table=True):
-    """
-    Aldersbestemte grænser for farvezoner pr. domain.
-
-    Zone-regel (MVP):
-      - green  hvis score >= green_min
-      - yellow hvis score >= yellow_min
-      - red    ellers
-
-    age_months_from/to: inclusive bounds i måneder.
-    """
     id: Optional[int] = Field(default=None, primary_key=True)
 
-    domain: Domain = Field(index=True)
+    domain: DomainStr = Field(index=True)
 
-    # Alder i måneder (inklusive bounds)
     age_months_from: int = Field(index=True)
     age_months_to: int = Field(index=True)
 
-    # Minimumscore for zoner
     green_min: int = Field(default=0)
     yellow_min: int = Field(default=0)
 
-    # Evt. note til admin/debug
     note: Optional[str] = None
 
 
 class ChildReport(SQLModel, table=True):
-    """
-    Simpel rapport pr. barn.
-    Vi holder den bevidst uden Relationship-felter for at undgå
-    SQLAlchemy/typing problemer med Optional[...] og list[...] generics.
-    """
     id: Optional[int] = Field(default=None, primary_key=True)
 
-    # Hvilket barn rapporten hører til
     child_id: int = Field(foreign_key=FK_CHILD_ID, index=True)
-
-    # Hvornår rapporten blev lavet
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
-    # Evt. type / label på rapporten
-    report_type: str = Field(default="standard")
+    # NEW (API expects these)
+    source: str = Field(default="unknown", index=True)
+    age_months: int = Field(default=0, index=True)
 
-    # Evt. samlet score / niveau – kan du bruge eller lade være
+    # Existing/legacy fields (keep for now)
+    report_type: str = Field(default="standard")
     total_score: int = Field(default=0)
     level: Optional[str] = None
-
-    # Hvis du på et tidspunkt vil gemme sti til genereret pdf
     pdf_path: Optional[str] = None
 
 
 class ChildReportScore(SQLModel, table=True):
-    """
-    Enkelt-score pr. opgave/øvelse i en rapport.
-    Igen: ingen Relationship(...) for at undgå generics-problemer.
-
-    IMPORTANT:
-    'domain' bruges til rapport-analyse (grøn/gul/rød pr. kategori).
-    """
     id: Optional[int] = Field(default=None, primary_key=True)
 
-    # FK til ChildReport
     report_id: int = Field(foreign_key="childreport.id", index=True)
 
-    # FK til ExerciseItem (den konkrete øvelse)
-    item_id: int = Field(foreign_key=FK_EXERCISEITEM_ID, index=True)
+    # LEGACY: was required before. We make it optional in the model (DB migration handles NOT NULL)
+    item_id: Optional[int] = Field(
+        default=None,
+        foreign_key=FK_EXERCISEITEM_ID,
+        index=True,
+    )
 
-    # Kategori til analyse (rim/ordforråd/...)
-    domain: Domain = Field(default="unknown", index=True)
+    # NEW: preferred analysis keys
+    domain_id: Optional[int] = Field(
+        default=None,
+        foreign_key="domain.id",
+        index=True,
+    )
+    raw_score: int = Field(default=0)
 
-    # Selve scoren – tilpas felter efter hvad du reelt bruger
+    # LEGACY (keep, but don’t use going forward)
+    domain: DomainStr = Field(default="unknown", index=True)
     score: int = Field(default=0)
     max_score: int = Field(default=1)
 

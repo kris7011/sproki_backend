@@ -15,7 +15,7 @@ from .db import get_session
 
 from app.models_exercise import Exercise, ChildExerciseProgress
 # <-- IMPORTANT: Domain lives here (code/name/title)
-from app.models import Domain
+from app.models import Domain as DomainModel
 from app.models_report import ChildReport  # <-- Keep ChildReport here
 
 from app.report_analysis import compute_report_analysis, ReportAnalysisResult
@@ -117,7 +117,7 @@ def exercises_for_child(
         )
 
     # Map domain_code -> Domain row (for pretty names)
-    all_domains = list(session.exec(select(Domain)))
+    all_domains = list(session.exec(select(DomainModel)))
     domain_by_code = {
         d.code: d for d in all_domains if getattr(d, "code", None)}
 

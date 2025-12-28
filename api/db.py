@@ -2,24 +2,21 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from typing import Any, Dict, Generator
 
+from sqlalchemy.engine import Engine
 from sqlmodel import SQLModel, Session, create_engine
 
 
 def _get_database_url() -> str:
-    # Local default
     default_local = "sqlite:///./sproki.db"
-
-    # Render persistent disk (recommended)
-    # If you mount a disk at /data, use sqlite:////data/sproki.db (4 slashes)
     default_render = "sqlite:////data/sproki.db"
 
     url = os.getenv("DATABASE_URL")
     if url and url.strip():
         return url.strip()
 
-    # Heuristic: if Render disk likely exists, prefer persistent sqlite
     if os.path.isdir("/data"):
         return default_render
 
@@ -30,7 +27,6 @@ DATABASE_URL = _get_database_url()
 
 connect_args: Dict[str, Any] = {}
 if DATABASE_URL.startswith("sqlite"):
-    # Needed for sqlite with multiple threads in FastAPI/Uvicorn
     connect_args = {"check_same_thread": False}
 
 engine = create_engine(
@@ -41,8 +37,99 @@ engine = create_engine(
 )
 
 
+def _sqlite_migrate(engine: Engine) -> None:
+    url = str(engine.url)
+    if not url.startswith("sqlite"):
+        return
+
+    db_path = engine.url.database or ""
+    if not db_path:
+        return
+
+    con = sqlite3.connect(db_path)
+    cur = con.cursor()
+
+    def _cols(table: str) -> dict[str, dict]:
+        cur.execute(f"PRAGMA table_info('{table}')")
+        out: dict[str, dict] = {}
+        for cid, name, col_type, notnull, dflt_value, pk in cur.fetchall():
+            out[name] = {
+                "type": col_type,
+                "notnull": int(notnull),
+                "default": dflt_value,
+                "pk": int(pk),
+            }
+        return out
+
+    # childreport: add columns if missing
+    if "childreport" in _cols("sqlite_master"):  # not used, keep simple
+        pass
+
+    cols = _cols("childreport")
+    if "source" not in cols:
+        cur.execute(
+            "ALTER TABLE childreport ADD COLUMN source TEXT DEFAULT 'unknown'")
+    if "age_months" not in cols:
+        cur.execute(
+            "ALTER TABLE childreport ADD COLUMN age_months INTEGER DEFAULT 0")
+
+    # childreportscore: add columns if missing
+    cols = _cols("childreportscore")
+    if "domain_id" not in cols:
+        cur.execute("ALTER TABLE childreportscore ADD COLUMN domain_id INTEGER")
+    if "raw_score" not in cols:
+        cur.execute(
+            "ALTER TABLE childreportscore ADD COLUMN raw_score INTEGER DEFAULT 0")
+
+    # If item_id is NOT NULL, rebuild table to allow NULL item_id
+    cols = _cols("childreportscore")
+    item_id_notnull = ("item_id" in cols) and (cols["item_id"]["notnull"] == 1)
+    if item_id_notnull:
+        cur.execute("BEGIN")
+        cur.execute(
+            "ALTER TABLE childreportscore RENAME TO childreportscore_old")
+
+        cur.execute(
+            """
+            CREATE TABLE childreportscore (
+                id INTEGER PRIMARY KEY,
+                report_id INTEGER NOT NULL,
+                item_id INTEGER,
+                domain TEXT DEFAULT 'unknown',
+                score INTEGER DEFAULT 0,
+                max_score INTEGER DEFAULT 1,
+                note TEXT,
+                domain_id INTEGER,
+                raw_score INTEGER DEFAULT 0
+            )
+            """
+        )
+
+        cur.execute(
+            """
+            INSERT INTO childreportscore (id, report_id, item_id, domain, score, max_score, note, domain_id, raw_score)
+            SELECT
+                id,
+                report_id,
+                item_id,
+                COALESCE(domain, 'unknown'),
+                COALESCE(score, 0),
+                COALESCE(max_score, 1),
+                note,
+                domain_id,
+                COALESCE(raw_score, COALESCE(score, 0))
+            FROM childreportscore_old
+            """
+        )
+
+        cur.execute("DROP TABLE childreportscore_old")
+        cur.execute("COMMIT")
+
+    con.commit()
+    con.close()
+
+
 def init_db() -> None:
-    # Import all models so SQLModel.metadata knows all tables before create_all.
     try:
         from app import models  # noqa: F401
     except Exception as e:
@@ -61,13 +148,16 @@ def init_db() -> None:
 
     SQLModel.metadata.create_all(bind=engine)
 
+    # SQLite self-migration (Render)
+    try:
+        _sqlite_migrate(engine)
+    except Exception as e:
+        print("sqlite migrate failed:", repr(e))
+
 
 def get_session() -> Generator[Session, None, None]:
-    session = Session(engine)
-    try:
+    with Session(engine) as session:
         yield session
-    finally:
-        session.close()
 
 
 def open_session() -> Session:
@@ -75,9 +165,6 @@ def open_session() -> Session:
 
 
 def seed_minimal_data() -> dict:
-    # Seed a minimal demo dataset into the SAME DB as the API uses.
-    # More robust idempotency: checks both Domain + Exercise.
-
     from sqlmodel import select
     from app.models import Institution, Parent, Child, Domain, DomainThreshold
     from app.models_exercise import Exercise
@@ -94,7 +181,6 @@ def seed_minimal_data() -> dict:
         if existing_domain and existing_ex:
             return {"seeded": False, "reason": "demo data already exists"}
 
-        # Institution
         inst = session.exec(select(Institution)).first()
         if not inst:
             inst = Institution(name="Sproki Børnehus")
@@ -105,7 +191,6 @@ def seed_minimal_data() -> dict:
         assert inst.id is not None
         inst_id: int = inst.id
 
-        # Parent
         parent = session.exec(select(Parent).where(
             Parent.email == "maria@example.com")).first()
         if not parent:
@@ -114,7 +199,6 @@ def seed_minimal_data() -> dict:
             session.commit()
             session.refresh(parent)
 
-        # Child
         child = session.exec(select(Child).where(Child.name == "Alma")).first()
         if not child:
             child = Child(
@@ -131,7 +215,6 @@ def seed_minimal_data() -> dict:
         assert child.id is not None
         child_id: int = child.id
 
-        # Domain
         if not existing_domain:
             domain_rim = Domain(code="rim", name="Rim", title="Rim og lydleg")
             session.add(domain_rim)
@@ -143,7 +226,6 @@ def seed_minimal_data() -> dict:
         assert domain_rim.id is not None
         domain_id: int = domain_rim.id
 
-        # Threshold (insert only if missing)
         existing_th = session.exec(
             select(DomainThreshold).where(
                 DomainThreshold.domain_id == domain_id)
@@ -161,7 +243,6 @@ def seed_minimal_data() -> dict:
             )
             session.add(th_rim)
 
-        # Exercise
         if not existing_ex:
             ex1 = Exercise(
                 domain="rim",

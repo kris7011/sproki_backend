@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import traceback
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
 from . import routes_exercises, routes_parents, routes_ppr, routes_reports
 from .db import engine, init_db, seed_minimal_data
@@ -16,7 +17,6 @@ from .settings import settings
 
 
 def _get_allow_origins() -> list[str]:
-    # In dev allow all to avoid CORS pain
     if os.getenv("REQUIRE_SUPABASE", "0") == "0":
         return ["*"]
 
@@ -29,12 +29,11 @@ def _get_allow_origins() -> list[str]:
 
 
 def _is_debug_enabled() -> bool:
-    # Debug endpoints are only enabled when explicitly allowed
+    # Only expose debug endpoints + stacktraces when explicitly enabled
     return os.getenv("ALLOW_DEBUG", "0") == "1"
 
 
 def _sqlite_db_path() -> Optional[str]:
-    # Most reliable way for sqlite:/// + sqlite://// urls
     url = str(engine.url)
     if not url.startswith("sqlite"):
         return None
@@ -42,23 +41,8 @@ def _sqlite_db_path() -> Optional[str]:
     return engine.url.database
 
 
-def _sqlite_connect(db_path: str) -> sqlite3.Connection:
-    # Nice-to-have: open read-only so debug endpoints don't lock the DB
-    # (works with absolute paths, and avoids "database is locked" in some cases)
-    try:
-        if os.path.isabs(db_path):
-            uri = f"file:{db_path}?mode=ro"
-            return sqlite3.connect(uri, uri=True)
-    except Exception:
-        pass
-
-    # Fallback
-    return sqlite3.connect(db_path)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     init_db()
 
     if os.getenv("SEED_ON_STARTUP", "0") == "1":
@@ -66,12 +50,9 @@ async def lifespan(app: FastAPI):
             result = seed_minimal_data()
             print("SEED_ON_STARTUP:", result)
         except Exception as e:
-            # Don't crash startup on Render – log and continue
             print("SEED_ON_STARTUP failed:", repr(e))
 
     yield
-
-    # Shutdown: nothing needed
 
 
 app = FastAPI(title="Sproki API", lifespan=lifespan)
@@ -85,6 +66,28 @@ app.add_middleware(
 )
 
 
+# Recommended: return stacktrace only when ALLOW_DEBUG=1
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    trace = traceback.format_exc()
+    print("UNHANDLED_EXCEPTION:", request.method, request.url.path)
+    print(trace)
+
+    if _is_debug_enabled():
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "Internal Server Error",
+                "error": repr(exc),
+                "path": request.url.path,
+                "method": request.method,
+                "trace": trace,
+            },
+        )
+
+    return Response(status_code=500, content="Internal Server Error", media_type="text/plain")
+
+
 @app.get("/")
 def root():
     return {"ok": True, "service": "sproki-backend"}
@@ -92,7 +95,6 @@ def root():
 
 @app.head("/")
 def root_head():
-    # Render health probe often does HEAD /
     return Response(status_code=200)
 
 
@@ -101,15 +103,8 @@ def health():
     return {"ok": True}
 
 
-@app.head("/health")
-def health_head():
-    # Nice-to-have: some providers probe /health via HEAD
-    return Response(status_code=200)
-
-
 @app.get("/version")
 def version():
-    # Optional: set GIT_SHA in Render env to see which build is running
     return {"version": os.getenv("GIT_SHA", "local")}
 
 
@@ -119,11 +114,9 @@ def debug_db() -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail="Not found")
 
     url = str(engine.url)
-    db_path = _sqlite_db_path()
-
     out: Dict[str, Any] = {
         "database_url": url,
-        "sqlite_db_path": db_path,
+        "sqlite_db_path": _sqlite_db_path(),
         "seed_on_startup": os.getenv("SEED_ON_STARTUP", "0"),
         "allow_debug": os.getenv("ALLOW_DEBUG", "0"),
         "tables": [],
@@ -131,48 +124,39 @@ def debug_db() -> Dict[str, Any]:
         "childreport_count": None,
     }
 
+    db_path = out["sqlite_db_path"]
     if not db_path:
         return out
 
+    con = sqlite3.connect(db_path)
+    cur = con.cursor()
+
+    cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
+    out["tables"] = [r[0] for r in cur.fetchall()]
+
     try:
-        con = _sqlite_connect(db_path)
-        cur = con.cursor()
+        cur.execute("SELECT COUNT(*) FROM exercise;")
+        out["exercise_count"] = cur.fetchone()[0]
+    except Exception:
+        pass
 
-        cur.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
-        out["tables"] = [r[0] for r in cur.fetchall()]
+    try:
+        cur.execute("SELECT COUNT(*) FROM childreport;")
+        out["childreport_count"] = cur.fetchone()[0]
+    except Exception:
+        pass
 
-        try:
-            cur.execute("SELECT COUNT(*) FROM exercise;")
-            out["exercise_count"] = cur.fetchone()[0]
-        except Exception:
-            pass
-
-        try:
-            cur.execute("SELECT COUNT(*) FROM childreport;")
-            out["childreport_count"] = cur.fetchone()[0]
-        except Exception:
-            pass
-
-        con.close()
-        return out
-
-    except Exception as e:
-        # Nice-to-have: don't 500 with plain text - show what failed in JSON
-        out["error"] = repr(e)
-        return out
+    con.close()
+    return out
 
 
 @app.post("/debug/seed")
 def debug_seed() -> Dict[str, Any]:
-    # Manual seed so you're not blocked by env vars / redeploys
     if not _is_debug_enabled():
         raise HTTPException(status_code=404, detail="Not found")
 
-    try:
-        return seed_minimal_data()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"seed failed: {repr(e)}")
+    return seed_minimal_data()
 
 
 app.include_router(routes_reports.router)

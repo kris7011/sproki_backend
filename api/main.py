@@ -58,12 +58,21 @@ def version():
 
 @app.on_event("startup")
 def _startup():
+    # Always init DB (tables etc.)
     init_db()
 
+    # Optional seed (only when explicitly enabled)
+    if os.getenv("SEED_ON_STARTUP", "0") == "1":
+        try:
+            # local import to avoid import-time side effects
+            from app.seed import seed_initial_data
+            seed_initial_data()
+        except Exception as e:
+            # Don't crash startup on Render – log and continue.
+            print("SEED_ON_STARTUP failed:", repr(e))
 
-# Her antager vi, at hver routes_*.py har: router = APIRouter(...)
-# Pylance kan ikke altid se attribute 'router' på modulet, så vi ignorerer det for type checkeren.
-app.include_router(routes_reports.router)     # type: ignore[attr-defined]
-app.include_router(routes_exercises.router)   # type: ignore[attr-defined]
-app.include_router(routes_parents.router)     # type: ignore[attr-defined]
-app.include_router(routes_ppr.router)         # type: ignore[attr-defined]
+
+app.include_router(routes_reports.router)
+app.include_router(routes_exercises.router)
+app.include_router(routes_parents.router)
+app.include_router(routes_ppr.router)

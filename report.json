@@ -1,7 +1,0 @@
-{
-  "source": "demo",
-  "age_months": 51,
-  "scores": [
-    { "domain_code": "rim", "raw_score": 25 }
-  ]
-}

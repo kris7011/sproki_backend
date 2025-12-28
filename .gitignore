@@ -20,3 +20,5 @@ uploads/
 
 # git selv
 .git
+openapi.json
+report.json

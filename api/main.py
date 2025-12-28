@@ -16,7 +16,7 @@ from .settings import settings
 
 
 def _get_allow_origins() -> list[str]:
-    # I dev (REQUIRE_SUPABASE=0) tillader vi alle origins for at undgå CORS-problemer
+    # In dev allow all to avoid CORS pain
     if os.getenv("REQUIRE_SUPABASE", "0") == "0":
         return ["*"]
 
@@ -29,12 +29,12 @@ def _get_allow_origins() -> list[str]:
 
 
 def _is_debug_enabled() -> bool:
-    # Only expose debug endpoints when explicitly enabled
+    # Debug endpoints are only enabled when explicitly allowed
     return os.getenv("ALLOW_DEBUG", "0") == "1"
 
 
 def _sqlite_db_path() -> Optional[str]:
-    # engine.url.database is the most reliable for sqlite:/// and sqlite://// paths
+    # Most reliable way for sqlite:/// + sqlite://// urls
     url = str(engine.url)
     if not url.startswith("sqlite"):
         return None
@@ -42,8 +42,23 @@ def _sqlite_db_path() -> Optional[str]:
     return engine.url.database
 
 
+def _sqlite_connect(db_path: str) -> sqlite3.Connection:
+    # Nice-to-have: open read-only so debug endpoints don't lock the DB
+    # (works with absolute paths, and avoids "database is locked" in some cases)
+    try:
+        if os.path.isabs(db_path):
+            uri = f"file:{db_path}?mode=ro"
+            return sqlite3.connect(uri, uri=True)
+    except Exception:
+        pass
+
+    # Fallback
+    return sqlite3.connect(db_path)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Startup
     init_db()
 
     if os.getenv("SEED_ON_STARTUP", "0") == "1":
@@ -51,10 +66,12 @@ async def lifespan(app: FastAPI):
             result = seed_minimal_data()
             print("SEED_ON_STARTUP:", result)
         except Exception as e:
-            # Don't crash startup on Render – log and continue.
+            # Don't crash startup on Render – log and continue
             print("SEED_ON_STARTUP failed:", repr(e))
 
     yield
+
+    # Shutdown: nothing needed
 
 
 app = FastAPI(title="Sproki API", lifespan=lifespan)
@@ -84,8 +101,15 @@ def health():
     return {"ok": True}
 
 
+@app.head("/health")
+def health_head():
+    # Nice-to-have: some providers probe /health via HEAD
+    return Response(status_code=200)
+
+
 @app.get("/version")
 def version():
+    # Optional: set GIT_SHA in Render env to see which build is running
     return {"version": os.getenv("GIT_SHA", "local")}
 
 
@@ -95,49 +119,53 @@ def debug_db() -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail="Not found")
 
     url = str(engine.url)
+    db_path = _sqlite_db_path()
+
     out: Dict[str, Any] = {
         "database_url": url,
+        "sqlite_db_path": db_path,
         "seed_on_startup": os.getenv("SEED_ON_STARTUP", "0"),
         "allow_debug": os.getenv("ALLOW_DEBUG", "0"),
         "tables": [],
         "exercise_count": None,
         "childreport_count": None,
-        "sqlite_db_path": None,
     }
-
-    db_path = _sqlite_db_path()
-    out["sqlite_db_path"] = db_path
 
     if not db_path:
         return out
 
-    con = sqlite3.connect(db_path)
-    cur = con.cursor()
-
-    cur.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
-    out["tables"] = [r[0] for r in cur.fetchall()]
-
-    # Best-effort counts (won't crash if tables are missing)
     try:
-        cur.execute("SELECT COUNT(*) FROM exercise;")
-        out["exercise_count"] = cur.fetchone()[0]
-    except Exception:
-        pass
+        con = _sqlite_connect(db_path)
+        cur = con.cursor()
 
-    try:
-        cur.execute("SELECT COUNT(*) FROM childreport;")
-        out["childreport_count"] = cur.fetchone()[0]
-    except Exception:
-        pass
+        cur.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
+        out["tables"] = [r[0] for r in cur.fetchall()]
 
-    con.close()
-    return out
+        try:
+            cur.execute("SELECT COUNT(*) FROM exercise;")
+            out["exercise_count"] = cur.fetchone()[0]
+        except Exception:
+            pass
+
+        try:
+            cur.execute("SELECT COUNT(*) FROM childreport;")
+            out["childreport_count"] = cur.fetchone()[0]
+        except Exception:
+            pass
+
+        con.close()
+        return out
+
+    except Exception as e:
+        # Nice-to-have: don't 500 with plain text - show what failed in JSON
+        out["error"] = repr(e)
+        return out
 
 
 @app.post("/debug/seed")
 def debug_seed() -> Dict[str, Any]:
-    # Nice-to-have: manual seed so you're not blocked by Render env variables / redeploys
+    # Manual seed so you're not blocked by env vars / redeploys
     if not _is_debug_enabled():
         raise HTTPException(status_code=404, detail="Not found")
 

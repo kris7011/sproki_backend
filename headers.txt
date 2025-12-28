@@ -1,0 +1,11 @@
+HTTP/2 500 
+date: Sun, 28 Dec 2025 09:29:31 GMT
+content-type: text/plain; charset=utf-8
+cf-ray: 9b50089f2e6aabd5-CPH
+rndr-id: 9c719012-dcda-4c54
+vary: Accept-Encoding
+x-render-origin-server: uvicorn
+cf-cache-status: DYNAMIC
+server: cloudflare
+alt-svc: h3=":443"; ma=86400
+

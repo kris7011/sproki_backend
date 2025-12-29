@@ -6,17 +6,20 @@ import sqlite3
 from typing import Any, Dict, Generator
 
 from sqlalchemy import event
-from sqlalchemy.engine import Engine
 from sqlmodel import SQLModel, Session, create_engine
+
+
+def _is_render() -> bool:
+    return os.getenv("RENDER", "").lower() == "true" or bool(os.getenv("RENDER_SERVICE_ID"))
 
 
 def _get_database_url() -> str:
     default_local = "sqlite:///./sproki.db"
     default_render = "sqlite:////data/sproki.db"
 
-    url = os.getenv("DATABASE_URL")
-    if url and url.strip():
-        return url.strip()
+    url = (os.getenv("DATABASE_URL") or "").strip()
+    if url:
+        return url
 
     if os.path.isdir("/data"):
         return default_render
@@ -41,11 +44,11 @@ engine = create_engine(
 )
 
 
-def _sqlite_db_path(db_engine: Engine) -> str | None:
-    url = str(db_engine.url)
+def _sqlite_db_path() -> str | None:
+    url = str(engine.url)
     if not url.startswith("sqlite"):
         return None
-    return db_engine.url.database
+    return engine.url.database
 
 
 if DATABASE_URL.startswith("sqlite"):
@@ -80,10 +83,16 @@ def _cols(cur: sqlite3.Cursor, table: str) -> dict[str, dict]:
     return out
 
 
-def _sqlite_migrate(db_engine: Engine) -> None:
-    db_path = _sqlite_db_path(db_engine)
+def _sqlite_migrate() -> None:
+    db_path = _sqlite_db_path()
     if not db_path:
         return
+
+    print(f"[db] DATABASE_URL={str(engine.url)} sqlite_path={db_path}")
+
+    if _is_render() and not os.path.isdir("/data"):
+        print(
+            "[db] WARNING: Render detected but /data is not mounted. DB may be ephemeral.")
 
     con = sqlite3.connect(db_path)
     cur = con.cursor()
@@ -92,7 +101,6 @@ def _sqlite_migrate(db_engine: Engine) -> None:
         con.close()
         return
 
-    # childreport: add columns if missing
     cols = _cols(cur, "childreport")
     if "source" not in cols:
         cur.execute(
@@ -102,7 +110,6 @@ def _sqlite_migrate(db_engine: Engine) -> None:
             "ALTER TABLE childreport ADD COLUMN age_months INTEGER DEFAULT 0")
 
     if _table_exists(cur, "childreportscore"):
-        # childreportscore: add columns if missing
         cols = _cols(cur, "childreportscore")
         if "domain_id" not in cols:
             cur.execute(
@@ -111,7 +118,6 @@ def _sqlite_migrate(db_engine: Engine) -> None:
             cur.execute(
                 "ALTER TABLE childreportscore ADD COLUMN raw_score INTEGER DEFAULT 0")
 
-        # If item_id is NOT NULL, rebuild table to allow NULL item_id
         cols = _cols(cur, "childreportscore")
         item_id_notnull = ("item_id" in cols) and (
             cols["item_id"]["notnull"] == 1)
@@ -180,9 +186,8 @@ def init_db() -> None:
 
     SQLModel.metadata.create_all(bind=engine)
 
-    # SQLite self-migration (Render)
     try:
-        _sqlite_migrate(engine)
+        _sqlite_migrate()
     except Exception as e:
         print("sqlite migrate failed:", repr(e))
 

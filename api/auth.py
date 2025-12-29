@@ -21,7 +21,7 @@ from .db import engine
 from .models_user import User as UserModel, Role as RoleEnum
 
 # In dev we allow missing Authorization header (auto_error=False)
-bearer_scheme = HTTPBearer(auto_error=False)
+bearer_scheme = HTTPBearer(auto_error=True)
 
 
 class JWKSCache:

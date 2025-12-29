@@ -5,12 +5,14 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import desc
 from sqlmodel import Session, select
 
-from app.auth import require_role, User
+from .auth import require_roles
+from .models_user import User as UserModel, Role as RoleEnum
+
 from app.models import Domain as DomainModel
 from app.models_exercise import ChildExerciseProgress, Exercise
 from app.models_report import ChildReport
@@ -55,7 +57,8 @@ class AttemptIn(BaseModel):
 @router.get("")
 def list_exercises(
     domain_code: str | None = Query(default=None),
-    user: User = Depends(require_role(["leader", "staff", "ppr"])),
+    user: UserModel = Depends(require_roles(
+        RoleEnum.LEDER, RoleEnum.PERSONALE, RoleEnum.PPR)),
     session: Session = Depends(get_session),
 ):
     stmt = select(Exercise).where(Exercise.is_active == True)  # noqa: E712
@@ -77,7 +80,10 @@ def list_exercises(
 )
 def exercises_for_child(
     child_id: int,
-    user: User = Depends(require_role(["leader", "staff", "parent", "ppr"])),
+    user: UserModel = Depends(
+        require_roles(RoleEnum.LEDER, RoleEnum.PERSONALE,
+                      RoleEnum.FORAELDER, RoleEnum.PPR)
+    ),
     session: Session = Depends(get_session),
 ):
     stmt = (
@@ -89,7 +95,7 @@ def exercises_for_child(
     report = session.exec(stmt).first()
     if report is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=404,
             detail="No report found for this child",
         )
 
@@ -160,24 +166,29 @@ def exercises_for_child(
 def post_attempt(
     exercise_id: int,
     payload: AttemptIn,
-    user: User = Depends(require_role(["leader", "staff", "parent", "ppr"])),
+    user: UserModel = Depends(
+        require_roles(RoleEnum.LEDER, RoleEnum.PERSONALE,
+                      RoleEnum.FORAELDER, RoleEnum.PPR)
+    ),
     session: Session = Depends(get_session),
 ):
     ex = session.get(Exercise, exercise_id)
     if not ex:
         raise HTTPException(status_code=404, detail="Exercise not found")
 
+    status_value = "completed" if payload.correct else "in_progress"
+
     att = ChildExerciseProgress(
         child_id=payload.child_id,
         exercise_id=exercise_id,
-        status="completed" if payload.correct else "in_progress",
+        status=status_value,
     )
 
     session.add(att)
     session.commit()
     session.refresh(att)
 
-    return {"ok": True, "attempt_id": att.id}
+    return {"ok": True, "attempt_id": att.id, "status": status_value}
 
 
 # ----------------------------------------------------------------------
@@ -187,7 +198,8 @@ def post_attempt(
 @router.get("/progression/{child_id}")
 def progression(
     child_id: int,
-    user: User = Depends(require_role(["leader", "staff", "ppr"])),
+    user: UserModel = Depends(require_roles(
+        RoleEnum.LEDER, RoleEnum.PERSONALE, RoleEnum.PPR)),
     session: Session = Depends(get_session),
 ):
     rep_stmt = (

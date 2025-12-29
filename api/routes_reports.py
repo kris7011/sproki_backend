@@ -8,7 +8,9 @@ from pydantic import BaseModel
 from sqlalchemy import desc
 from sqlmodel import Session, select
 
-from app.auth import require_role, User
+from .auth import require_roles
+from .models_user import User as UserModel, Role as RoleEnum
+
 from app.models import Domain as DomainModel
 from app.models_report import ChildReport, ChildReportScore
 from app.report_analysis import ReportAnalysisResult, compute_report_analysis
@@ -87,7 +89,8 @@ def _convert_analysis_to_response(analysis: ReportAnalysisResult) -> ChildReport
 def create_child_report(
     child_id: int,
     payload: ChildReportCreate,
-    user: User = Depends(require_role(["leader", "staff"])),
+    user: UserModel = Depends(require_roles(
+        RoleEnum.LEDER, RoleEnum.PERSONALE)),
     session: Session = Depends(get_session),
 ):
     report = ChildReport(
@@ -128,7 +131,10 @@ def create_child_report(
 )
 def get_latest_child_report_analysis(
     child_id: int,
-    user: User = Depends(require_role(["leader", "staff", "parent", "ppr"])),
+    user: UserModel = Depends(
+        require_roles(RoleEnum.LEDER, RoleEnum.PERSONALE,
+                      RoleEnum.FORAELDER, RoleEnum.PPR)
+    ),
     session: Session = Depends(get_session),
 ):
     statement = (

@@ -11,6 +11,9 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
+import routes_admin
+import routes_me
+
 from . import routes_exercises, routes_parents, routes_ppr, routes_reports
 from .db import engine, init_db, seed_minimal_data
 from .settings import settings
@@ -163,3 +166,5 @@ app.include_router(routes_reports.router)
 app.include_router(routes_exercises.router)
 app.include_router(routes_parents.router)
 app.include_router(routes_ppr.router)
+app.include_router(routes_me.router)
+app.include_router(routes_admin.router)

@@ -7,24 +7,18 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlmodel import Session, select
 from sqlalchemy import desc
+from sqlmodel import Session, select
 
 from app.auth import require_role, User
+from app.models import Domain as DomainModel
+from app.models_exercise import ChildExerciseProgress, Exercise
+from app.models_report import ChildReport
+from app.report_analysis import ReportAnalysisResult, compute_report_analysis
+
 from .db import get_session
 
-from app.models_exercise import Exercise, ChildExerciseProgress
-# <-- IMPORTANT: Domain lives here (code/name/title)
-from app.models import Domain as DomainModel
-from app.models_report import ChildReport  # <-- Keep ChildReport here
-
-from app.report_analysis import compute_report_analysis, ReportAnalysisResult
-
 router = APIRouter(prefix="/exercises", tags=["exercises"])
-
-
-def get_db_session() -> Session:
-    return next(get_session())
 
 
 # ----------------------------------------------------------------------
@@ -62,7 +56,7 @@ class AttemptIn(BaseModel):
 def list_exercises(
     domain_code: str | None = Query(default=None),
     user: User = Depends(require_role(["leader", "staff", "ppr"])),
-    session: Session = Depends(get_db_session),
+    session: Session = Depends(get_session),
 ):
     stmt = select(Exercise).where(Exercise.is_active == True)  # noqa: E712
 
@@ -70,8 +64,7 @@ def list_exercises(
     if domain_code:
         stmt = stmt.where(Exercise.domain == domain_code)
 
-    rows = list(session.exec(stmt))
-    return rows
+    return list(session.exec(stmt))
 
 
 # ----------------------------------------------------------------------
@@ -85,7 +78,7 @@ def list_exercises(
 def exercises_for_child(
     child_id: int,
     user: User = Depends(require_role(["leader", "staff", "parent", "ppr"])),
-    session: Session = Depends(get_db_session),
+    session: Session = Depends(get_session),
 ):
     stmt = (
         select(ChildReport)
@@ -116,7 +109,6 @@ def exercises_for_child(
             exercises=[],
         )
 
-    # Map domain_code -> Domain row (for pretty names)
     all_domains = list(session.exec(select(DomainModel)))
     domain_by_code = {
         d.code: d for d in all_domains if getattr(d, "code", None)}
@@ -124,9 +116,7 @@ def exercises_for_child(
     age_months = analysis.age_months
 
     exercises = list(
-        session.exec(
-            select(Exercise).where(Exercise.is_active == True)  # noqa: E712
-        )
+        session.exec(select(Exercise).where(Exercise.is_active == True))  # noqa: E712
     )
 
     filtered = [
@@ -140,16 +130,15 @@ def exercises_for_child(
     ex_items: List[ExerciseResponse] = []
     for ex in filtered:
         d = domain_by_code.get(ex.domain)
-
         ex_items.append(
             ExerciseResponse(
-                id=ex.id or 0,
+                id=int(ex.id or 0),
                 # Exercise has no "code" column right now
                 code=str(ex.id or 0),
                 title=ex.title,
                 description=ex.description,
                 domain_code=ex.domain,
-                domain_name=d.name if d else ex.domain,  # fallback
+                domain_name=d.name if d else ex.domain,
                 min_age_months=ex.min_age_months,
                 max_age_months=ex.max_age_months,
             )
@@ -172,7 +161,7 @@ def post_attempt(
     exercise_id: int,
     payload: AttemptIn,
     user: User = Depends(require_role(["leader", "staff", "parent", "ppr"])),
-    session: Session = Depends(get_db_session),
+    session: Session = Depends(get_session),
 ):
     ex = session.get(Exercise, exercise_id)
     if not ex:
@@ -199,7 +188,7 @@ def post_attempt(
 def progression(
     child_id: int,
     user: User = Depends(require_role(["leader", "staff", "ppr"])),
-    session: Session = Depends(get_db_session),
+    session: Session = Depends(get_session),
 ):
     rep_stmt = (
         select(ChildReport)
@@ -214,7 +203,6 @@ def progression(
     att_stmt = (
         select(ChildExerciseProgress)
         .where(ChildExerciseProgress.child_id == child_id)
-        # <-- fix field name
         .order_by(desc(ChildExerciseProgress.last_attempt_at))
     )
     attempts = list(session.exec(att_stmt))
@@ -226,7 +214,7 @@ def progression(
         if not ex:
             continue
 
-        domain_code = ex.domain  # <-- Exercise stores domain as string
+        domain_code = ex.domain
         st = stats.setdefault(domain_code, {"total": 0.0, "correct": 0.0})
 
         st["total"] += 1

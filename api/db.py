@@ -5,6 +5,7 @@ import os
 import sqlite3
 from typing import Any, Dict, Generator
 
+from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from sqlmodel import SQLModel, Session, create_engine
 
@@ -27,7 +28,10 @@ DATABASE_URL = _get_database_url()
 
 connect_args: Dict[str, Any] = {}
 if DATABASE_URL.startswith("sqlite"):
-    connect_args = {"check_same_thread": False}
+    connect_args = {
+        "check_same_thread": False,
+        "timeout": 30,  # wait on locks (seconds)
+    }
 
 engine = create_engine(
     DATABASE_URL,
@@ -37,35 +41,59 @@ engine = create_engine(
 )
 
 
-def _sqlite_migrate(engine: Engine) -> None:
-    url = str(engine.url)
+def _sqlite_db_path(db_engine: Engine) -> str | None:
+    url = str(db_engine.url)
     if not url.startswith("sqlite"):
-        return
+        return None
+    return db_engine.url.database
 
-    db_path = engine.url.database or ""
+
+if DATABASE_URL.startswith("sqlite"):
+
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragmas(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA synchronous=NORMAL;")
+        cursor.execute("PRAGMA busy_timeout=30000;")
+        cursor.close()
+
+
+def _table_exists(cur: sqlite3.Cursor, table: str) -> bool:
+    cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?;",
+        (table,),
+    )
+    return cur.fetchone() is not None
+
+
+def _cols(cur: sqlite3.Cursor, table: str) -> dict[str, dict]:
+    cur.execute(f"PRAGMA table_info('{table}')")
+    out: dict[str, dict] = {}
+    for cid, name, col_type, notnull, dflt_value, pk in cur.fetchall():
+        out[name] = {
+            "type": col_type,
+            "notnull": int(notnull),
+            "default": dflt_value,
+            "pk": int(pk),
+        }
+    return out
+
+
+def _sqlite_migrate(db_engine: Engine) -> None:
+    db_path = _sqlite_db_path(db_engine)
     if not db_path:
         return
 
     con = sqlite3.connect(db_path)
     cur = con.cursor()
 
-    def _cols(table: str) -> dict[str, dict]:
-        cur.execute(f"PRAGMA table_info('{table}')")
-        out: dict[str, dict] = {}
-        for cid, name, col_type, notnull, dflt_value, pk in cur.fetchall():
-            out[name] = {
-                "type": col_type,
-                "notnull": int(notnull),
-                "default": dflt_value,
-                "pk": int(pk),
-            }
-        return out
+    if not _table_exists(cur, "childreport"):
+        con.close()
+        return
 
     # childreport: add columns if missing
-    if "childreport" in _cols("sqlite_master"):  # not used, keep simple
-        pass
-
-    cols = _cols("childreport")
+    cols = _cols(cur, "childreport")
     if "source" not in cols:
         cur.execute(
             "ALTER TABLE childreport ADD COLUMN source TEXT DEFAULT 'unknown'")
@@ -73,57 +101,61 @@ def _sqlite_migrate(engine: Engine) -> None:
         cur.execute(
             "ALTER TABLE childreport ADD COLUMN age_months INTEGER DEFAULT 0")
 
-    # childreportscore: add columns if missing
-    cols = _cols("childreportscore")
-    if "domain_id" not in cols:
-        cur.execute("ALTER TABLE childreportscore ADD COLUMN domain_id INTEGER")
-    if "raw_score" not in cols:
-        cur.execute(
-            "ALTER TABLE childreportscore ADD COLUMN raw_score INTEGER DEFAULT 0")
+    if _table_exists(cur, "childreportscore"):
+        # childreportscore: add columns if missing
+        cols = _cols(cur, "childreportscore")
+        if "domain_id" not in cols:
+            cur.execute(
+                "ALTER TABLE childreportscore ADD COLUMN domain_id INTEGER")
+        if "raw_score" not in cols:
+            cur.execute(
+                "ALTER TABLE childreportscore ADD COLUMN raw_score INTEGER DEFAULT 0")
 
-    # If item_id is NOT NULL, rebuild table to allow NULL item_id
-    cols = _cols("childreportscore")
-    item_id_notnull = ("item_id" in cols) and (cols["item_id"]["notnull"] == 1)
-    if item_id_notnull:
-        cur.execute("BEGIN")
-        cur.execute(
-            "ALTER TABLE childreportscore RENAME TO childreportscore_old")
+        # If item_id is NOT NULL, rebuild table to allow NULL item_id
+        cols = _cols(cur, "childreportscore")
+        item_id_notnull = ("item_id" in cols) and (
+            cols["item_id"]["notnull"] == 1)
 
-        cur.execute(
-            """
-            CREATE TABLE childreportscore (
-                id INTEGER PRIMARY KEY,
-                report_id INTEGER NOT NULL,
-                item_id INTEGER,
-                domain TEXT DEFAULT 'unknown',
-                score INTEGER DEFAULT 0,
-                max_score INTEGER DEFAULT 1,
-                note TEXT,
-                domain_id INTEGER,
-                raw_score INTEGER DEFAULT 0
+        if item_id_notnull:
+            cur.execute("BEGIN")
+            cur.execute(
+                "ALTER TABLE childreportscore RENAME TO childreportscore_old")
+
+            cur.execute(
+                """
+                CREATE TABLE childreportscore (
+                    id INTEGER PRIMARY KEY,
+                    report_id INTEGER NOT NULL,
+                    item_id INTEGER,
+                    domain TEXT DEFAULT 'unknown',
+                    score INTEGER DEFAULT 0,
+                    max_score INTEGER DEFAULT 1,
+                    note TEXT,
+                    domain_id INTEGER,
+                    raw_score INTEGER DEFAULT 0
+                )
+                """
             )
-            """
-        )
 
-        cur.execute(
-            """
-            INSERT INTO childreportscore (id, report_id, item_id, domain, score, max_score, note, domain_id, raw_score)
-            SELECT
-                id,
-                report_id,
-                item_id,
-                COALESCE(domain, 'unknown'),
-                COALESCE(score, 0),
-                COALESCE(max_score, 1),
-                note,
-                domain_id,
-                COALESCE(raw_score, COALESCE(score, 0))
-            FROM childreportscore_old
-            """
-        )
+            cur.execute(
+                """
+                INSERT INTO childreportscore (id, report_id, item_id, domain, score, max_score, note, domain_id, raw_score)
+                SELECT
+                    id,
+                    report_id,
+                    item_id,
+                    COALESCE(domain, 'unknown'),
+                    COALESCE(score, 0),
+                    COALESCE(max_score, 1),
+                    note,
+                    domain_id,
+                    COALESCE(raw_score, COALESCE(score, 0))
+                FROM childreportscore_old
+                """
+            )
 
-        cur.execute("DROP TABLE childreportscore_old")
-        cur.execute("COMMIT")
+            cur.execute("DROP TABLE childreportscore_old")
+            cur.execute("COMMIT")
 
     con.commit()
     con.close()
@@ -171,12 +203,9 @@ def seed_minimal_data() -> dict:
 
     with Session(engine) as session:
         existing_domain = session.exec(
-            select(Domain).where(Domain.code == "rim")
-        ).first()
-
-        existing_ex = session.exec(
-            select(Exercise).where(Exercise.domain == "rim")
-        ).first()
+            select(Domain).where(Domain.code == "rim")).first()
+        existing_ex = session.exec(select(Exercise).where(
+            Exercise.domain == "rim")).first()
 
         if existing_domain and existing_ex:
             return {"seeded": False, "reason": "demo data already exists"}

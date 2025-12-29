@@ -11,7 +11,8 @@ from sqlmodel import Session, select
 from app.auth import require_role, User
 from app.models import Domain as DomainModel
 from app.models_report import ChildReport, ChildReportScore
-from app.report_analysis import compute_report_analysis, ReportAnalysisResult
+from app.report_analysis import ReportAnalysisResult, compute_report_analysis
+
 from .db import get_session
 
 router = APIRouter(prefix="/reports", tags=["reports"])

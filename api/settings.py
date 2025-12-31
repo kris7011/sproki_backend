@@ -2,6 +2,7 @@
 # Reads a .env if present; otherwise uses environment or defaults.
 
 from __future__ import annotations
+
 import os
 from dataclasses import dataclass
 from typing import List
@@ -24,6 +25,10 @@ class Settings:
     supabase_jwks_url: str
     supabase_jwt_issuer: str
     supabase_jwt_audience: str
+
+    # Supabase Admin (service role) + bootstrap leader
+    supabase_service_role_key: str
+    initial_leader_email: str
 
 
 def load_settings() -> Settings:
@@ -49,6 +54,11 @@ def load_settings() -> Settings:
     issr = os.getenv("SUPABASE_JWT_ISSUER", f"{proj}/auth/v1" if proj else "")
     audi = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
 
+    # Supabase Admin + bootstrap leader
+    service_role = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+    initial_leader_email = os.getenv(
+        "INITIAL_LEADER_EMAIL", "").strip().lower()
+
     return Settings(
         database_url=database_url,
         sql_echo=sql_echo,
@@ -57,6 +67,8 @@ def load_settings() -> Settings:
         supabase_jwks_url=jwks,
         supabase_jwt_issuer=issr,
         supabase_jwt_audience=audi,
+        supabase_service_role_key=service_role,
+        initial_leader_email=initial_leader_email,
     )
 
 

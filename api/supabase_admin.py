@@ -6,7 +6,11 @@ import httpx
 from .settings import settings
 
 
-async def invite_user(email: str, invite_token: str) -> Dict[str, Any]:
+async def invite_user(
+    email: str,
+    invite_token: str,
+    redirect_to: Optional[str] = None,
+) -> Dict[str, Any]:
     if not settings.supabase_project_url or not settings.supabase_service_role_key:
         raise RuntimeError("Supabase admin config missing")
 
@@ -20,10 +24,11 @@ async def invite_user(email: str, invite_token: str) -> Dict[str, Any]:
 
     payload: Dict[str, Any] = {
         "email": email,
-        "data": {
-            "invite_token": invite_token,
-        },
+        "data": {"invite_token": invite_token},
     }
+
+    if redirect_to:
+        payload["redirect_to"] = redirect_to
 
     async with httpx.AsyncClient(timeout=15) as client:
         r = await client.post(url, headers=headers, json=payload)

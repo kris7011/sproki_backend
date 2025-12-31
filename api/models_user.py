@@ -1,7 +1,9 @@
+# api/models_user.py
 # pyright: reportGeneralTypeIssues=none, reportAttributeAccessIssue=none, reportCallIssue=none
 
 from __future__ import annotations
 
+import datetime
 from enum import Enum
 from typing import Optional
 
@@ -19,13 +21,13 @@ class User(SQLModel, table=True):
     __tablename__ = "api_user"  # type: ignore[assignment]
     __table_args__ = {"extend_existing": True}
 
-    id: str = Field(primary_key=True, index=True)
+    id: str = Field(primary_key=True, index=True)  # Supabase "sub"
     email: str = Field(index=True)
     role: Role = Field(default=Role.FORAELDER)
 
     institution_id: Optional[int] = Field(
         default=None, foreign_key="institution.id")
-    # VIGTIGT: fjern relationship her, den trigger Optional['Institution']-fejlen
+    # No relationship – avoids Optional['Institution'] typing issues
 
 
 class Invite(SQLModel, table=True):
@@ -34,10 +36,16 @@ class Invite(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
 
-    token: str = Field(index=True)
-    email: str
+    token: str = Field(index=True, unique=True)
+    email: str = Field(index=True)
     role: Role
 
     institution_id: int = Field(foreign_key="institution.id")
     created_by_user_id: str = Field(foreign_key="api_user.id")
-    # Også her: ingen relationship
+
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+    accepted_at: Optional[datetime.datetime] = Field(default=None)
+    accepted_by_user_id: Optional[str] = Field(
+        default=None, foreign_key="api_user.id")

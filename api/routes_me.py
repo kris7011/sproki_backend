@@ -11,6 +11,7 @@ from sqlmodel import Session, select
 from .auth import get_current_user
 from .db import engine
 from .models_user import User as UserModel, Invite as InviteModel, Role
+from .models_access import ChildAccess
 
 router = APIRouter(prefix="", tags=["me"])
 
@@ -31,10 +32,10 @@ class AcceptInviteResponse(BaseModel):
     invite_applied: bool
     invite_role: Optional[Role] = None
     invite_institution_id: Optional[int] = None
+    invite_child_id: Optional[int] = None
 
 
 def _to_me(u: UserModel) -> MeResponse:
-    # Explicit conversion makes Pylance happy and keeps response stable.
     return MeResponse.model_validate(u, from_attributes=True)
 
 
@@ -55,7 +56,6 @@ def accept_invite(user: UserModel = Depends(get_current_user)) -> AcceptInviteRe
             session.commit()
             session.refresh(db_user)
 
-        # Use "== None" instead of ".is_(None)" to avoid Pylance datetime confusion.
         inv = session.exec(
             select(InviteModel).where(
                 InviteModel.email == email,
@@ -69,8 +69,22 @@ def accept_invite(user: UserModel = Depends(get_current_user)) -> AcceptInviteRe
                 invite_applied=False,
             )
 
+        # Apply invite role + institution
         db_user.role = inv.role
         db_user.institution_id = inv.institution_id
+
+        # NEW: If invite is linked to a child, create access
+        if inv.child_id is not None:
+            existing_access = session.exec(
+                select(ChildAccess).where(
+                    ChildAccess.child_id == inv.child_id,
+                    ChildAccess.user_id == db_user.id,
+                )
+            ).first()
+
+            if not existing_access:
+                session.add(ChildAccess(
+                    child_id=inv.child_id, user_id=db_user.id))
 
         inv.accepted_at = datetime.datetime.now(datetime.timezone.utc)
         inv.accepted_by_user_id = db_user.id
@@ -85,4 +99,5 @@ def accept_invite(user: UserModel = Depends(get_current_user)) -> AcceptInviteRe
             invite_applied=True,
             invite_role=inv.role,
             invite_institution_id=inv.institution_id,
+            invite_child_id=inv.child_id,
         )

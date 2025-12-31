@@ -36,6 +36,10 @@ class InviteCreate(BaseModel):
     email: str
     role: Role
     institution_id: int
+
+    # NEW: For FORAELDER invites: connect to a specific child
+    child_id: Optional[int] = None
+
     redirect_to: Optional[str] = None
 
 
@@ -48,6 +52,7 @@ class InviteRead(BaseModel):
     role: Role
     institution_id: int
     created_by_user_id: str
+    child_id: Optional[int] = None
     created_at: datetime.datetime
     accepted_at: Optional[datetime.datetime] = None
     accepted_by_user_id: Optional[str] = None
@@ -63,8 +68,6 @@ def list_users(
 
         if q:
             qn = q.strip().lower()
-
-            # SQLModel fields look like "str" to Pylance, but are SQLAlchemy columns at runtime.
             email_col = cast(ColumnElement[Any], col(UserModel.email))
             stmt = stmt.where(func.lower(email_col).like(f"%{qn}%"))
 
@@ -99,9 +102,8 @@ def list_invites(
         stmt = select(InviteModel).order_by(desc(created_at_col))
 
         if only_pending:
-            accepted_at_col = cast(
-                ColumnElement[Any], col(InviteModel.accepted_at))
-            stmt = stmt.where(accepted_at_col.is_(None))
+            # Avoid ".is_(None)" on datetime field to keep Pylance calm
+            stmt = stmt.where(InviteModel.accepted_at == None)  # noqa: E711
 
         return list(session.exec(stmt).all())
 
@@ -116,13 +118,12 @@ async def create_invite(
         raise HTTPException(status_code=400, detail="Email is required")
 
     token = uuid.uuid4().hex
-    accepted_at_col = cast(ColumnElement[Any], col(InviteModel.accepted_at))
 
     with Session(engine) as session:
         existing = session.exec(
             select(InviteModel).where(
                 InviteModel.email == email,
-                accepted_at_col.is_(None),
+                InviteModel.accepted_at == None,  # noqa: E711
             )
         ).first()
         if existing:
@@ -134,13 +135,18 @@ async def create_invite(
             role=body.role,
             institution_id=body.institution_id,
             created_by_user_id=leader.id,
+            child_id=body.child_id,  # NEW
         )
         session.add(inv)
         session.commit()
         session.refresh(inv)
 
     try:
-        await invite_user(email=email, invite_token=token, redirect_to=body.redirect_to)
+        await invite_user(
+            email=email,
+            invite_token=token,
+            redirect_to=body.redirect_to,
+        )
     except Exception as ex:
         raise HTTPException(
             status_code=502, detail=f"Supabase invite failed: {ex}")

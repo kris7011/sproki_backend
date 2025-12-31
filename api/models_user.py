@@ -43,6 +43,9 @@ class Invite(SQLModel, table=True):
     institution_id: int = Field(foreign_key="institution.id")
     created_by_user_id: str = Field(foreign_key="api_user.id")
 
+    # NEW: link invite to a specific child (used for FORAELDER)
+    child_id: Optional[int] = Field(default=None, foreign_key="child.id")
+
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
     )

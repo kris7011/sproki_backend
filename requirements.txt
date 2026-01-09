@@ -26,3 +26,5 @@ pytesseract==0.3.13
 
 # --- Dev / typing ---
 typing-extensions>=4.12.2
+
+psycopg2-binary==2.9.9

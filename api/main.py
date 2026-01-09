@@ -11,9 +11,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
-import routes_admin
-import routes_me
-
+from . import routes_admin, routes_me, routes_children
 from . import routes_exercises, routes_parents, routes_ppr, routes_reports
 from .db import engine, init_db, seed_minimal_data
 from .settings import settings
@@ -32,7 +30,6 @@ def _get_allow_origins() -> list[str]:
 
 
 def _is_debug_enabled() -> bool:
-    # Only expose debug endpoints + stacktraces when explicitly enabled
     return os.getenv("ALLOW_DEBUG", "0") == "1"
 
 
@@ -40,7 +37,6 @@ def _sqlite_db_path() -> Optional[str]:
     url = str(engine.url)
     if not url.startswith("sqlite"):
         return None
-
     return engine.url.database
 
 
@@ -63,13 +59,13 @@ app = FastAPI(title="Sproki API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_get_allow_origins(),
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-# Recommended: return stacktrace only when ALLOW_DEBUG=1
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     trace = traceback.format_exc()
@@ -88,7 +84,11 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
             },
         )
 
-    return Response(status_code=500, content="Internal Server Error", media_type="text/plain")
+    return Response(
+        status_code=500,
+        content="Internal Server Error",
+        media_type="text/plain",
+    )
 
 
 @app.get("/")
@@ -168,3 +168,4 @@ app.include_router(routes_parents.router)
 app.include_router(routes_ppr.router)
 app.include_router(routes_me.router)
 app.include_router(routes_admin.router)
+app.include_router(routes_children.router)

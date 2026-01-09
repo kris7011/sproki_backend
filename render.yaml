@@ -10,7 +10,7 @@ services:
       mountPath: /data
       sizeGB: 1
     envVars:
-      - key: DATABASE_URL
-        value: sqlite:////data/sproki_reports.db   # 4 skråstreger (SQLite absolut sti)
-      - key: UPLOAD_DIR
-        value: /data/uploads
+    - key: REQUIRE_SUPABASE
+      value: "1"
+    - key: ALLOW_DEBUG
+      value: "0"

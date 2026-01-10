@@ -56,11 +56,23 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Sproki API", lifespan=lifespan)
 
+allow_origins = _get_allow_origins()
+
+# Browser/CORS rule:
+# If allow_origins contains "*", we MUST set allow_credentials=False.
+allow_credentials = False if "*" in allow_origins else True
+
+# Only use regex when we are NOT using "*"
+allow_origin_regex = None
+if "*" not in allow_origins:
+    # Optional helper for local dev if you whitelist origins
+    allow_origin_regex = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_get_allow_origins(),
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
-    allow_credentials=True,
+    allow_origins=allow_origins,
+    allow_origin_regex=allow_origin_regex,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 import datetime
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional
 
 import httpx
 from fastapi import Depends, HTTPException, status
@@ -36,14 +36,25 @@ def _now_epoch() -> float:
     return datetime.datetime.now(datetime.timezone.utc).timestamp()
 
 
+def _jwks_headers() -> Dict[str, str]:
+    # Supabase /auth/v1/keys kan kræve apikey header
+    key = settings.supabase_anon_key or settings.supabase_service_role_key
+    if not key:
+        return {}
+    return {"apikey": key}
+
+
 async def _fetch_jwks() -> Dict[str, Any]:
-    if not settings.supabase_jwks_url:
+    url = settings.supabase_jwks_url
+    if not url:
         raise HTTPException(
-            status_code=500, detail="SUPABASE_JWKS_URL is not configured")
+            status_code=500,
+            detail="SUPABASE_JWKS_URL is not configured",
+        )
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(settings.supabase_jwks_url)
+            r = await client.get(url, headers=_jwks_headers())
             r.raise_for_status()
 
             data: Dict[str, Any] = r.json()
@@ -56,10 +67,14 @@ async def _fetch_jwks() -> Dict[str, Any]:
     except httpx.RequestError as e:
         # DNS / connect / timeout
         raise HTTPException(
-            status_code=503, detail=f"Auth JWKS unreachable: {repr(e)}")
+            status_code=503,
+            detail=f"Auth JWKS unreachable: {repr(e)} | url={url}",
+        )
     except httpx.HTTPStatusError as e:
         raise HTTPException(
-            status_code=503, detail=f"Auth JWKS HTTP error: {e.response.status_code}")
+            status_code=503,
+            detail=f"Auth JWKS HTTP error: {e.response.status_code} | url={url}",
+        )
 
 
 async def get_jwks() -> Dict[str, Any]:
@@ -74,6 +89,8 @@ async def get_jwks() -> Dict[str, Any]:
 
 
 def _select_jwk_for_token(token: str, jwks: Dict[str, Any]) -> Dict[str, Any]:
+    # We only read the header to pick the correct key (kid) from JWKS.
+    # Signature verification happens in jwt.decode below.
     header = jwt.get_unverified_header(token)
     kid = header.get("kid")
     keys = jwks.get("keys")
@@ -92,43 +109,26 @@ def _select_jwk_for_token(token: str, jwks: Dict[str, Any]) -> Dict[str, Any]:
         status_code=401, detail="No matching JWK for token 'kid'")
 
 
-def _require_token(creds: Optional[HTTPAuthorizationCredentials]) -> str:
-    if not creds or not creds.credentials:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    return creds.credentials
+def _ensure_dev_user() -> UserModel:
+    with Session(engine) as session:
+        u = session.exec(
+            select(UserModel).where(UserModel.id == "dev-user")
+        ).first()
+        if u:
+            return u
 
-
-def _decode_and_verify(token: str, jwk: Dict[str, Any]) -> Dict[str, Any]:
-    # Prefer algorithm from JWKS (avoids "unverified header" warning from Sonar)
-    jwk_alg = (jwk.get("alg") or "").upper()
-    allowed_algs: List[str] = ["ES256", "RS256"]
-
-    if jwk_alg:
-        if jwk_alg not in allowed_algs:
-            raise HTTPException(
-                status_code=401, detail=f"Unsupported JWK alg: {jwk_alg}")
-        algs = [jwk_alg]
-    else:
-        # Some JWKS don't include "alg". Supabase tokens are typically ES256.
-        algs = allowed_algs
-
-    try:
-        return jwt.decode(
-            token,
-            jwk,  # python-jose accepts a JWK dict directly
-            algorithms=algs,
-            audience=settings.supabase_jwt_audience,
-            issuer=settings.supabase_jwt_issuer,
-            options={"verify_at_hash": False},
+        u = UserModel(
+            id="dev-user",
+            email="dev@sproki.local",
+            role=RoleEnum.LEDER,
         )
-    except JWTError as e:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token: {e}",
-        )
+        session.add(u)
+        session.commit()
+        session.refresh(u)
+        return u
 
 
-def _ensure_user(sub: str, email: str) -> UserModel:
+def _upsert_user(sub: str, email: str) -> UserModel:
     with Session(engine) as session:
         u = session.exec(select(UserModel).where(UserModel.id == sub)).first()
         if u:
@@ -142,34 +142,38 @@ def _ensure_user(sub: str, email: str) -> UserModel:
         return u
 
 
-def _get_or_create_dev_user() -> UserModel:
-    with Session(engine) as session:
-        u = session.exec(select(UserModel).where(
-            UserModel.id == "dev-user")).first()
-        if not u:
-            u = UserModel(
-                id="dev-user",
-                email="dev@sproki.local",
-                role=RoleEnum.LEDER,
-            )
-            session.add(u)
-            session.commit()
-            session.refresh(u)
-        return u
-
-
 async def get_current_user(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ) -> UserModel:
-    # Dev bypass
     if os.getenv("REQUIRE_SUPABASE", "0") == "0":
-        return _get_or_create_dev_user()
+        return _ensure_dev_user()
 
-    token = _require_token(creds)
+    if not creds or not creds.credentials:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    token = creds.credentials
 
     jwks = await get_jwks()
     jwk = _select_jwk_for_token(token, jwks)
-    claims = _decode_and_verify(token, jwk)
+
+    # Do not inspect unverified token headers for "alg".
+    # We simply restrict which algorithms we will accept.
+    allowed_algs = ["ES256", "RS256"]
+
+    try:
+        claims = jwt.decode(
+            token,
+            jwk,
+            algorithms=allowed_algs,
+            audience=settings.supabase_jwt_audience,
+            issuer=settings.supabase_jwt_issuer,
+            options={"verify_at_hash": False},
+        )
+    except JWTError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid token: {e}",
+        )
 
     sub = claims.get("sub")
     user_meta = claims.get("user_metadata") or {}
@@ -180,7 +184,7 @@ async def get_current_user(
         raise HTTPException(
             status_code=401, detail="Token missing required claims")
 
-    return _ensure_user(sub, email)
+    return _upsert_user(sub=sub, email=email)
 
 
 def require_roles(*allowed_roles: RoleEnum):

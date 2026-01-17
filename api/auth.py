@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 import httpx
 from fastapi import Depends, HTTPException, status
@@ -37,7 +37,7 @@ def _now_epoch() -> float:
 
 
 def _jwks_headers() -> Dict[str, str]:
-    # Supabase /auth/v1/keys kan kræve apikey header
+    # Supabase JWKS endpoint can require an apikey header
     key = settings.supabase_anon_key or settings.supabase_service_role_key
     if not key:
         return {}
@@ -65,7 +65,6 @@ async def _fetch_jwks() -> Dict[str, Any]:
             return data
 
     except httpx.RequestError as e:
-        # DNS / connect / timeout
         raise HTTPException(
             status_code=503,
             detail=f"Auth JWKS unreachable: {repr(e)} | url={url}",
@@ -88,32 +87,21 @@ async def get_jwks() -> Dict[str, Any]:
     return data
 
 
-def _select_jwk_for_token(token: str, jwks: Dict[str, Any]) -> Dict[str, Any]:
-    # We only read the header to pick the correct key (kid) from JWKS.
-    # Signature verification happens in jwt.decode below.
-    header = jwt.get_unverified_header(token)
-    kid = header.get("kid")
+def _jwks_key_list(jwks: Dict[str, Any]) -> List[Dict[str, Any]]:
     keys = jwks.get("keys")
-
-    if not kid:
-        if isinstance(keys, list) and keys:
-            return keys[0]
-        raise HTTPException(status_code=500, detail="JWKS has no keys")
-
     if isinstance(keys, list):
+        out: List[Dict[str, Any]] = []
         for k in keys:
-            if isinstance(k, dict) and k.get("kid") == kid:
-                return k
-
-    raise HTTPException(
-        status_code=401, detail="No matching JWK for token 'kid'")
+            if isinstance(k, dict):
+                out.append(k)
+        return out
+    return []
 
 
 def _ensure_dev_user() -> UserModel:
     with Session(engine) as session:
-        u = session.exec(
-            select(UserModel).where(UserModel.id == "dev-user")
-        ).first()
+        u = session.exec(select(UserModel).where(
+            UserModel.id == "dev-user")).first()
         if u:
             return u
 
@@ -142,6 +130,39 @@ def _upsert_user(sub: str, email: str) -> UserModel:
         return u
 
 
+def _decode_claims_with_jwks(token: str, jwks: Dict[str, Any]) -> Dict[str, Any]:
+    # We avoid reading unverified token headers (Sonar S5659).
+    # Instead we try verifying the signature with each JWK until one succeeds.
+    keys = _jwks_key_list(jwks)
+    if not keys:
+        raise HTTPException(status_code=500, detail="JWKS has no keys")
+
+    allowed_algs = ["ES256", "RS256"]
+    last_error: str | None = None
+
+    for jwk in keys:
+        try:
+            claims = jwt.decode(
+                token,
+                jwk,
+                algorithms=allowed_algs,
+                audience=settings.supabase_jwt_audience,
+                issuer=settings.supabase_jwt_issuer,
+                options={"verify_at_hash": False},
+            )
+            if isinstance(claims, dict):
+                return claims
+            last_error = "Decoded claims were not a dict"
+        except JWTError as e:
+            last_error = str(e)
+            continue
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=f"Invalid token: {last_error or 'Signature verification failed'}",
+    )
+
+
 async def get_current_user(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ) -> UserModel:
@@ -154,26 +175,7 @@ async def get_current_user(
     token = creds.credentials
 
     jwks = await get_jwks()
-    jwk = _select_jwk_for_token(token, jwks)
-
-    # Do not inspect unverified token headers for "alg".
-    # We simply restrict which algorithms we will accept.
-    allowed_algs = ["ES256", "RS256"]
-
-    try:
-        claims = jwt.decode(
-            token,
-            jwk,
-            algorithms=allowed_algs,
-            audience=settings.supabase_jwt_audience,
-            issuer=settings.supabase_jwt_issuer,
-            options={"verify_at_hash": False},
-        )
-    except JWTError as e:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token: {e}",
-        )
+    claims = _decode_claims_with_jwks(token, jwks)
 
     sub = claims.get("sub")
     user_meta = claims.get("user_metadata") or {}

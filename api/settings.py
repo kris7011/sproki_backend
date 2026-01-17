@@ -45,9 +45,13 @@ def load_settings() -> Settings:
     ]
 
     proj = (os.getenv("SUPABASE_PROJECT_URL", "") or "").strip().rstrip("/")
+
+    # Your curl tests show:
+    #   /auth/v1/keys -> 404
+    #   /auth/v1/.well-known/jwks.json -> 200
     jwks = (os.getenv("SUPABASE_JWKS_URL", "") or "").strip()
     if not jwks and proj:
-        jwks = f"{proj}/auth/v1/keys"
+        jwks = f"{proj}/auth/v1/.well-known/jwks.json"
 
     issr = (os.getenv("SUPABASE_JWT_ISSUER", "") or "").strip()
     if not issr and proj:

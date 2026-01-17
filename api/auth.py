@@ -36,15 +36,6 @@ def _now_epoch() -> float:
     return datetime.datetime.now(datetime.timezone.utc).timestamp()
 
 
-def _auth_debug_enabled() -> bool:
-    return os.getenv("AUTH_DEBUG", "0") == "1"
-
-
-def _auth_debug(msg: str) -> None:
-    if _auth_debug_enabled():
-        print(msg)
-
-
 def _jwks_headers() -> Dict[str, str]:
     # Supabase JWKS endpoint can require an apikey header
     key = settings.supabase_anon_key or settings.supabase_service_role_key
@@ -180,10 +171,6 @@ async def get_current_user(
 
     if not creds or not creds.credentials:
         raise HTTPException(status_code=401, detail="Not authenticated")
-
-    _auth_debug(f"[AUTH] JWKS URL = {settings.supabase_jwks_url}")
-    _auth_debug(f"[AUTH] ISSUER   = {settings.supabase_jwt_issuer}")
-    _auth_debug(f"[AUTH] AUDIENCE = {settings.supabase_jwt_audience}")
 
     token = creds.credentials
     jwks = await get_jwks()

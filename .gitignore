@@ -22,3 +22,12 @@ uploads/
 .git
 openapi.json
 report.json
+
+# Local environment configuration
+.env
+.env.*
+!.env.example
+
+# Python
+.pytest_cache/
+*.py[cod]
